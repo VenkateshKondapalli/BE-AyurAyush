@@ -26,7 +26,7 @@ const chatHistorySchema = new Schema(
           type: String,
           required: true,
         },
-        Timestamp: {
+        timestamp: {
           type: Date,
           default: Date.now,
         },
@@ -51,6 +51,11 @@ const chatHistorySchema = new Schema(
         min: 1,
         max: 10,
         default: null,
+      },
+      urgencyLevel: {
+        type: String,
+        enum: ["normal", "urgent", "emergency"],
+        default: "normal",
       },
       recommendedSpecialist: {
         type: String,
@@ -90,7 +95,7 @@ chatHistorySchema.methods.addMessage = function (
   content,
   isEmergency = false,
 ) {
-  this.message.push({
+  this.messages.push({
     role,
     content,
     timestamp: new Date(),
