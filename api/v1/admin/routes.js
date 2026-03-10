@@ -51,7 +51,7 @@ adminsRouter.get(
   "/appointments/pending",
   validateLoggedInUserMiddleware,
   validateIsAdminMiddleware,
-  getpendingDoctorApplicationsController,
+  getPendingNormalAppointmentsController,
 );
 
 adminsRouter.get(

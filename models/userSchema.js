@@ -15,6 +15,8 @@ const userSchema = new Schema(
       type: String,
       required: true,
       trim: true,
+      minlength: 2,
+      maxlength: 100,
     },
 
     email: {
@@ -23,6 +25,7 @@ const userSchema = new Schema(
       unique: true,
       trim: true,
       lowercase: true,
+      match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please enter a valid email"],
     },
 
     phone: {
@@ -30,7 +33,7 @@ const userSchema = new Schema(
       required: true,
       unique: true,
       trim: true,
-      sparse: true,
+      match: [/^\d{10}$/, "Phone must be a 10-digit number"],
     },
 
     gender: {
@@ -40,13 +43,14 @@ const userSchema = new Schema(
     },
 
     dob: {
-      type: String,
+      type: Date,
       required: true,
     },
 
     password: {
       type: String,
       required: true,
+      minlength: [8, "Password must be at least 8 characters"],
     },
 
     roles: {
@@ -100,6 +104,7 @@ userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {
     this.password = await bcrypt.hash(this.password.toString(), 12);
   }
+  next();
 });
 
 const UserModel = model("user", userSchema);

@@ -6,7 +6,7 @@ const {
   completeAppointment,
 } = require("./services");
 
-const doctorDashboardController = async (req, res) => {
+const doctorDashboardController = async (req, res, next) => {
   try {
     const data = await getDoctorDashboard(req.currentDoctor.userId);
     res.status(200).json({
@@ -15,18 +15,11 @@ const doctorDashboardController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.code === 11000) {
-      return res
-        .status(409)
-        .json({ isSuccess: false, message: "Doctor profile already exists" });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const getDoctorAppointmentsController = async (req, res) => {
+const getDoctorAppointmentsController = async (req, res, next) => {
   try {
     const { status, date } = req.query;
     const data = await getDoctorAppointments(req.currentDoctor.userId, {
@@ -39,13 +32,11 @@ const getDoctorAppointmentsController = async (req, res) => {
       data,
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const getTodayAppointmentsController = async (req, res) => {
+const getTodayAppointmentsController = async (req, res, next) => {
   try {
     const data = await getTodayAppointments(req.currentDoctor.userId);
     res.status(200).json({
@@ -54,13 +45,11 @@ const getTodayAppointmentsController = async (req, res) => {
       data,
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const getAppointmentDetailController = async (req, res) => {
+const getAppointmentDetailController = async (req, res, next) => {
   try {
     const { appointmentId } = req.params;
     const data = await getAppointmentDetail(
@@ -73,18 +62,11 @@ const getAppointmentDetailController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const completeAppointmentController = async (req, res) => {
+const completeAppointmentController = async (req, res, next) => {
   try {
     const { appointmentId } = req.params;
     const { doctorNotes, prescription } = req.body;
@@ -102,14 +84,7 @@ const completeAppointmentController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 

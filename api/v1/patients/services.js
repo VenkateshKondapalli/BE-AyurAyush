@@ -305,9 +305,8 @@ const cancelAppointment = async (userId, appointmentId) => {
 const getVerifiedDoctors = async (specialization) => {
   const doctorQuery = { isVerified: true };
   if (specialization) {
-    doctorQuery.specialization = {
-      $regex: new RegExp(`^${specialization}$`, "i"),
-    };
+    const escaped = specialization.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    doctorQuery.specialization = { $regex: new RegExp(`^${escaped}$`, "i") };
   }
 
   const doctors = await DoctorModel.find(doctorQuery);

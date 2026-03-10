@@ -47,6 +47,7 @@ const approveDoctorApplication = async (applicationId, adminUserId) => {
 
   application.status = "approved";
   application.reviewedBy = adminUserId;
+  application.reviewedAt = new Date();
   await application.save();
 
   await UserModel.findByIdAndUpdate(application.userId, {
@@ -58,7 +59,9 @@ const approveDoctorApplication = async (applicationId, adminUserId) => {
     specialization: application.specialization,
     experience: application.experience,
     qualification: application.qualification,
+    licenseNumber: application.licenseNumber,
     isVerified: true,
+    verifiedAt: new Date(),
   });
 };
 
@@ -73,6 +76,7 @@ const rejectDoctorApplication = async (applicationId, adminUserId) => {
 
   application.status = "rejected";
   application.reviewedBy = adminUserId;
+  application.reviewedAt = new Date();
   await application.save();
 };
 

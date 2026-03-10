@@ -1,15 +1,14 @@
 const { OtpModel } = require("../../../models/otpSchema");
 const bcrypt = require("bcrypt");
 
+const MAX_OTP_ATTEMPTS = 5;
+
 const validateOtpMiddleware = async (req, res, next) => {
   try {
-    console.log("-----🟢 inside validateOtpMiddleware-------");
-
     const { email, otp } = req.body;
-    console.log("🟡 : email:", email);
 
     // Fetch the latest OTP for this email
-    const otpDoc = await OtpModel.findOne({ email }).sort("-createdAt").lean();
+    const otpDoc = await OtpModel.findOne({ email }).sort("-createdAt");
 
     if (otpDoc == null) {
       return res.status(400).json({
@@ -20,7 +19,6 @@ const validateOtpMiddleware = async (req, res, next) => {
 
     // Check if OTP has expired
     if (new Date() > new Date(otpDoc.expiresAt)) {
-      // Clean up the expired doc (TTL may not have kicked in yet)
       await OtpModel.deleteMany({ email });
       return res.status(400).json({
         isSuccess: false,
@@ -28,13 +26,25 @@ const validateOtpMiddleware = async (req, res, next) => {
       });
     }
 
-    const { otp: hashedOtp } = otpDoc;
-    const isCorrect = await bcrypt.compare(otp.toString(), hashedOtp);
+    // Check if max attempts exceeded
+    if (otpDoc.attempts >= MAX_OTP_ATTEMPTS) {
+      await OtpModel.deleteMany({ email });
+      return res.status(429).json({
+        isSuccess: false,
+        message:
+          "Too many failed attempts. OTP invalidated. Please request a new one.",
+      });
+    }
+
+    const isCorrect = await bcrypt.compare(otp.toString(), otpDoc.otp);
 
     if (!isCorrect) {
+      // Increment attempt counter
+      await OtpModel.updateOne({ _id: otpDoc._id }, { $inc: { attempts: 1 } });
+      const remaining = MAX_OTP_ATTEMPTS - otpDoc.attempts - 1;
       return res.status(400).json({
         isSuccess: false,
-        message: "Invalid OTP",
+        message: `Invalid OTP. ${remaining > 0 ? `${remaining} attempt(s) remaining.` : "No attempts remaining. Please request a new OTP."}`,
       });
     }
 
@@ -43,8 +53,7 @@ const validateOtpMiddleware = async (req, res, next) => {
 
     next();
   } catch (err) {
-    console.log("-----🔴 Error in validateOtpMiddleware--------");
-
+    console.error("Error in validateOtpMiddleware:", err.message);
     res.status(500).json({
       isSuccess: false,
       message: "Internal Server Error",

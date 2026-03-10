@@ -8,7 +8,6 @@ const doctorAvailabiltySchema = new Schema(
       ref: "user",
       required: true,
       unique: true,
-      index: true,
     },
     availableDays: [
       {

@@ -11,7 +11,7 @@ const {
   offlineBookAppointment,
 } = require("./services");
 
-const adminDashboardController = async (req, res) => {
+const adminDashboardController = async (req, res, next) => {
   try {
     const stats = await getDashboardStats();
     res.status(200).json({
@@ -20,13 +20,11 @@ const adminDashboardController = async (req, res) => {
       data: { stats },
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const reviewDoctorApplicationsController = async (req, res) => {
+const reviewDoctorApplicationsController = async (req, res, next) => {
   try {
     const applications = await getPendingDoctorApplications();
     res.status(200).json({
@@ -35,13 +33,11 @@ const reviewDoctorApplicationsController = async (req, res) => {
       data: { applications },
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const approveDoctorApplicationController = async (req, res) => {
+const approveDoctorApplicationController = async (req, res, next) => {
   try {
     const { applicationId } = req.params;
     await approveDoctorApplication(applicationId, req.currentAdmin.userId);
@@ -50,18 +46,11 @@ const approveDoctorApplicationController = async (req, res) => {
       message: "Doctor application approved successfully",
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const rejectDoctorApplicationController = async (req, res) => {
+const rejectDoctorApplicationController = async (req, res, next) => {
   try {
     const { applicationId } = req.params;
     await rejectDoctorApplication(applicationId, req.currentAdmin.userId);
@@ -70,18 +59,11 @@ const rejectDoctorApplicationController = async (req, res) => {
       message: "Doctor application rejected",
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const getpendingDoctorApplicationsController = async (req, res) => {
+const getPendingNormalAppointmentsController = async (req, res, next) => {
   try {
     const appointments = await getPendingNormalAppointments();
     res.status(200).json({
@@ -94,13 +76,11 @@ const getpendingDoctorApplicationsController = async (req, res) => {
       },
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const getEmergencyAppointmentsController = async (req, res) => {
+const getEmergencyAppointmentsController = async (req, res, next) => {
   try {
     const appointments = await getEmergencyAppointments();
     res.status(200).json({
@@ -117,13 +97,11 @@ const getEmergencyAppointmentsController = async (req, res) => {
       },
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const approveAppointmentController = async (req, res) => {
+const approveAppointmentController = async (req, res, next) => {
   try {
     const { appointmentId } = req.params;
     const { edits, adminNotes } = req.body;
@@ -139,18 +117,11 @@ const approveAppointmentController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const rejectAppointmentController = async (req, res) => {
+const rejectAppointmentController = async (req, res, next) => {
   try {
     const { appointmentId } = req.params;
     const { reason } = req.body;
@@ -165,18 +136,11 @@ const rejectAppointmentController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const setDoctorAvailabilityController = async (req, res) => {
+const setDoctorAvailabilityController = async (req, res, next) => {
   try {
     const { doctorId } = req.params;
     const { availableDays, timeSlots, unavailableDates } = req.body;
@@ -191,18 +155,11 @@ const setDoctorAvailabilityController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const offlineBookAppointmentController = async (req, res) => {
+const offlineBookAppointmentController = async (req, res, next) => {
   try {
     const data = await offlineBookAppointment(
       req.currentAdmin.userId,
@@ -214,20 +171,7 @@ const offlineBookAppointmentController = async (req, res) => {
       data,
     });
   } catch (err) {
-    if (err.statusCode) {
-      return res
-        .status(err.statusCode)
-        .json({ isSuccess: false, message: err.message });
-    }
-    if (err.code === 11000) {
-      return res.status(409).json({
-        isSuccess: false,
-        message: "This appointment slot conflicts with an existing booking",
-      });
-    }
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
@@ -236,7 +180,7 @@ module.exports = {
   reviewDoctorApplicationsController,
   approveDoctorApplicationController,
   rejectDoctorApplicationController,
-  getpendingDoctorApplicationsController,
+  getPendingNormalAppointmentsController,
   getEmergencyAppointmentsController,
   approveAppointmentController,
   rejectAppointmentController,

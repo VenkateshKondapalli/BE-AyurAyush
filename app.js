@@ -2,6 +2,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const { apiRouter } = require("./api/v1/routes");
+const { errorHandler } = require("./api/v1/errorHandler");
 
 if (process.env.NODE_ENV != "production") {
   const dns = require("dns");
@@ -71,6 +72,9 @@ app.use("/api/v1/auth", authLimiter);
 app.use("/api/v1/otps", authLimiter);
 
 app.use("/api/v1", apiRouter);
+
+// Centralized error handler — must be after all routes
+app.use(errorHandler);
 
 app.listen(process.env.PORT, () => {
   console.log("-------- Server started --------");

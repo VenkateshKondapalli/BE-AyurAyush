@@ -7,40 +7,40 @@ const appointmentSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "user",
       required: true,
-      index: true,
     },
     doctorId: {
       type: Schema.Types.ObjectId,
       ref: "user",
       required: true,
-      index: true,
     },
     date: {
       type: Date,
       required: true,
-      index: true,
     },
     timeSlot: {
       type: String,
       required: true,
+      trim: true,
+      match: [
+        /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/,
+        "Invalid time slot format (e.g. 09:00 - 10:00)",
+      ],
     },
     status: {
       type: String,
       enum: [
-        "pending_admin_approval", // Waiting for admin to verify
-        "confirmed", // Admin approved, appointment is set
-        "completed", // Doctor marked as completed
-        "cancelled", // Cancelled by patient/admin
-        "rejected", // Admin rejected the appointment
+        "pending_admin_approval",
+        "confirmed",
+        "completed",
+        "cancelled",
+        "rejected",
       ],
       default: "pending_admin_approval",
-      index: true,
     },
     urgencyLevel: {
       type: String,
       enum: ["normal", "emergency"],
       default: "normal",
-      index: true,
     },
     chatConversationId: {
       type: String,
@@ -62,6 +62,7 @@ const appointmentSchema = new Schema(
     adminNotes: {
       type: String,
       default: "",
+      maxlength: 1000,
     },
     adminApprovedAt: {
       type: Date,
@@ -83,6 +84,7 @@ const appointmentSchema = new Schema(
     doctorNotes: {
       type: String,
       default: "",
+      maxlength: 2000,
     },
     prescription: {
       medications: [

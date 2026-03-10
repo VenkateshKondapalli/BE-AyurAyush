@@ -6,34 +6,27 @@ const {
   getPatientConversations,
 } = require("./services");
 
-const startConversationController = async (req, res) => {
+const startConversationController = async (req, res, next) => {
   try {
     const data = await startConversation(req.currentPatient.userId);
     res
       .status(201)
       .json({ isSuccess: true, message: "Conversation started", data });
   } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
-const sendMessageController = async (req, res) => {
+const sendMessageController = async (req, res, next) => {
   try {
     const data = await sendMessage(req.currentPatient.userId, req.body);
     res.status(200).json({ isSuccess: true, message: "Message sent", data });
   } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({
-      isSuccess: false,
-      message: err.statusCode ? err.message : "Internal Server Error",
-    });
+    next(err);
   }
 };
 
-const endConversationController = async (req, res) => {
+const endConversationController = async (req, res, next) => {
   try {
     const data = await endConversation(
       req.currentPatient.userId,
@@ -45,18 +38,11 @@ const endConversationController = async (req, res) => {
       data,
     });
   } catch (err) {
-    console.error(err);
-    const status = err.statusCode || 500;
-    const response = {
-      isSuccess: false,
-      message: err.statusCode ? err.message : "Internal Server Error",
-    };
-    if (err.data) response.data = err.data;
-    res.status(status).json(response);
+    next(err);
   }
 };
 
-const getConversationController = async (req, res) => {
+const getConversationController = async (req, res, next) => {
   try {
     const data = await getConversation(
       req.currentPatient.userId,
@@ -66,15 +52,11 @@ const getConversationController = async (req, res) => {
       .status(200)
       .json({ isSuccess: true, message: "Conversation retrieved", data });
   } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({
-      isSuccess: false,
-      message: err.statusCode ? err.message : "Internal Server Error",
-    });
+    next(err);
   }
 };
 
-const getPatientConversationsController = async (req, res) => {
+const getPatientConversationsController = async (req, res, next) => {
   try {
     const data = await getPatientConversations(req.currentPatient.userId);
     res.status(200).json({
@@ -83,10 +65,7 @@ const getPatientConversationsController = async (req, res) => {
       data,
     });
   } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ isSuccess: false, message: "Internal Server Error" });
+    next(err);
   }
 };
 
