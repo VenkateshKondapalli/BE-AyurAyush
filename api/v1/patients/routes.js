@@ -2,6 +2,7 @@ const express = require("express");
 const {
     validateLoggedInUserMiddleware,
     validatePatientRole,
+    validatePatientOrAdminRole,
 } = require("../middlewares");
 const {
     patientDashboardController,
@@ -85,7 +86,7 @@ patientsRouter.delete(
 patientsRouter.get(
     "/doctors",
     validateLoggedInUserMiddleware,
-    validatePatientRole,
+    validatePatientOrAdminRole,
     getVerifiedDoctorsController,
 );
 

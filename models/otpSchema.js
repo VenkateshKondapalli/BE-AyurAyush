@@ -51,11 +51,10 @@ otpSchema.pre("updateMany", function () {
 });
 // --------------------------------------------------
 
-otpSchema.pre("save", async function (next) {
+otpSchema.pre("save", async function () {
     if (this.isModified("otp")) {
         this.otp = await bcrypt.hash(this.otp.toString(), 12);
     }
-    next();
 });
 
 const OtpModel = model("otp", otpSchema);

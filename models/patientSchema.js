@@ -56,7 +56,7 @@ const patientSchema = new Schema(
     },
 );
 
-patientSchema.pre("save", async function (next) {
+patientSchema.pre("save", async function () {
     if (!this.mrn) {
         const year = new Date().getFullYear();
         const counter = await CounterModel.findByIdAndUpdate(
@@ -66,7 +66,6 @@ patientSchema.pre("save", async function (next) {
         );
         this.mrn = `AYR-${year}-${String(counter.seq).padStart(5, "0")}`;
     }
-    next();
 });
 
 const PatientModel = model("patient", patientSchema);

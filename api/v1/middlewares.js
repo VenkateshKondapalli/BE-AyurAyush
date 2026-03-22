@@ -20,18 +20,15 @@ const validateLoggedInUserMiddleware = (req, res, next) => {
             if (err) {
                 console.log("🔴 Invalid token... may be hacking attempt!");
 
-                res.status(401).json({
+                return res.status(401).json({
                     isSuccess: false,
                     message: "User not logged in!",
                 });
-                return;
-            } else {
-                console.log("✅ Valid user", data);
-                req.currentUser = data;
-                next();
             }
+
+            console.log("✅ Valid user", data);
             req.currentUser = data;
-            next();
+            return next();
         });
     } catch (err) {
         console.log("-----🔴 Error in validateLoggedInUserMiddleware--------");
@@ -93,6 +90,40 @@ const validatePatientRole = (req, res, next) => {
     }
 };
 
+const validatePatientOrAdminRole = (req, res, next) => {
+    try {
+        console.log("-----🟢 inside validatePatientOrAdminRole-------");
+
+        const { roles } = req.currentUser;
+
+        if (
+            roles &&
+            (roles.includes(ROLE_OPTIONS.PATIENT) ||
+                roles.includes(ROLE_OPTIONS.ADMIN))
+        ) {
+            if (roles.includes(ROLE_OPTIONS.PATIENT)) {
+                req.currentPatient = req.currentUser;
+            }
+            if (roles.includes(ROLE_OPTIONS.ADMIN)) {
+                req.currentAdmin = req.currentUser;
+            }
+            return next();
+        }
+
+        return res.status(403).json({
+            isSuccess: false,
+            message: "Patient or admin access only",
+        });
+    } catch (err) {
+        console.log("-----🔴 Error in validatePatientOrAdminRole--------");
+
+        return res.status(500).json({
+            isSuccess: false,
+            message: "Internal Server Error",
+        });
+    }
+};
+
 const validateDoctorRole = (req, res, next) => {
     try {
         console.log("-----🟢 inside validateDoctorRole-------");
@@ -122,5 +153,6 @@ module.exports = {
     validateLoggedInUserMiddleware,
     validateIsAdminMiddleware,
     validatePatientRole,
+    validatePatientOrAdminRole,
     validateDoctorRole,
 };
