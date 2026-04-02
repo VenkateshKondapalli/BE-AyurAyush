@@ -322,40 +322,6 @@ const bookAppointment = async (
     };
 };
 
-const getTreatmentSuggestionsForPatient = async (conversationId, userId) => {
-    const chatHistory = await ChatHistoryModel.findOne({
-        conversationId,
-        patientId: userId,
-    });
-
-    if (!chatHistory) {
-        const error = new Error("Conversation not found");
-        error.statusCode = 404;
-        throw error;
-    }
-
-    if (
-        chatHistory.status !== "completed" &&
-        chatHistory.status !== "emergency"
-    ) {
-        const error = new Error(
-            "Conversation not yet completed. Please end the chat first.",
-        );
-        error.statusCode = 400;
-        throw error;
-    }
-
-    return {
-        conversationId,
-        suggestedCarePath: chatHistory.summary?.suggestedCarePath || "normal",
-        urgencyLevel: chatHistory.summary?.urgencyLevel || "normal",
-        recommendedTreatmentCodes:
-            chatHistory.summary?.recommendedTreatmentCodes || [],
-        prakritiType: chatHistory.summary?.prakritiType || null,
-        preConsultNote: chatHistory.summary?.preConsultNote || null,
-    };
-};
-
 const getPatientAppointments = async (userId, status, query = {}) => {
     const { page, limit, skip } = parsePagination(query);
     const filter = { patientId: userId };
