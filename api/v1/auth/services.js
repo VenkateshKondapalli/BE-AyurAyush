@@ -49,6 +49,7 @@ const loginUser = async ({ email, password }) => {
 
     return {
         token,
+        name: userDoc.name,
         roles: userDoc.roles,
         mustChangePassword: !!userDoc.mustChangePassword,
     };

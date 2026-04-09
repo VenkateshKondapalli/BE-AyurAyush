@@ -7,6 +7,31 @@ const {
     getAIChatResponse,
     generateConversationSummary,
 } = require("../../../utils/aiService");
+
+const CHAT_MAX_USER_PROMPTS = Number(process.env.CHAT_MAX_USER_PROMPTS || 30);
+const AI_UNAVAILABLE_FALLBACK_MESSAGE =
+    "Our AI assistant is currently experiencing high demand. Please wait a few seconds and send your message again.";
+
+const isAIProviderErrorForFallback = (err) => {
+    const status =
+        err?.status ||
+        err?.statusCode ||
+        err?.response?.status ||
+        err?.response?.statusCode;
+    const message = String(err?.message || "").toLowerCase();
+
+    if (err?.code === "AI_SERVICE_UNAVAILABLE") return true;
+    if ([429, 500, 502, 503, 504].includes(Number(status))) return true;
+
+    return (
+        message.includes("googlegenerativeai error") ||
+        message.includes("generativelanguage.googleapis.com") ||
+        message.includes("high demand") ||
+        message.includes("quota exceeded") ||
+        message.includes("rate-limits") ||
+        message.includes("not supported for generatecontent")
+    );
+};
 // ── Panchakarma/Ayurveda symptom indicators ──────────────────────────────────
 const PANCHAKARMA_INDICATORS = [
     "chronic pain",
@@ -124,6 +149,42 @@ const _buildPreConsultNote = (summary) => {
     };
 };
 
+const completeConversationWithSummary = async (chatHistory) => {
+    const messagesForSummary = chatHistory.messages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+    }));
+
+    const summary = await generateConversationSummary(messagesForSummary);
+    const isEmergency = chatHistory.status === "emergency";
+
+    if (isEmergency) {
+        summary.urgencyLevel = "emergency";
+    }
+
+    const recommendation = buildRecommendation(summary, isEmergency);
+
+    await chatHistory.completeSummary({
+        ...summary,
+        suggestedCarePath: recommendation.suggestedCarePath,
+        recommendedTreatmentCodes: recommendation.recommendedTreatmentCodes,
+        prakritiType: recommendation.prakritiType,
+        preConsultNote: recommendation.preConsultNote,
+        carePreference: summary.carePreference,
+    });
+
+    return {
+        summary,
+        recommendation: {
+            suggestedCarePath: recommendation.suggestedCarePath,
+            urgencyLevel: recommendation.urgencyLevel,
+            recommendedTreatmentCodes: recommendation.recommendedTreatmentCodes,
+            prakritiType: recommendation.prakritiType,
+            preConsultNote: recommendation.preConsultNote,
+        },
+    };
+};
+
 const startConversation = async (userId) => {
     const conversationId = uuidv4();
 
@@ -161,6 +222,18 @@ const sendMessage = async (userId, { conversationId, message }) => {
         throw error;
     }
 
+    const existingUserMessageCount = chatHistory.messages.filter(
+        (msg) => msg.role === "user",
+    ).length;
+
+    if (existingUserMessageCount >= CHAT_MAX_USER_PROMPTS) {
+        const error = new Error(
+            `You have reached the maximum of ${CHAT_MAX_USER_PROMPTS} prompts in this conversation. Please end this chat and book an appointment, or start a new conversation.`,
+        );
+        error.statusCode = 400;
+        throw error;
+    }
+
     const isEmergency = checkForEmergency(message);
     if (isEmergency) {
         logger.warn("Emergency indicator detected in chat conversation", {
@@ -169,6 +242,10 @@ const sendMessage = async (userId, { conversationId, message }) => {
     }
 
     await chatHistory.addMessage("user", message, isEmergency);
+
+    const userMessageCount = chatHistory.messages.filter(
+        (msg) => msg.role === "user",
+    ).length;
 
     if (isEmergency && chatHistory.status !== "emergency") {
         chatHistory.markAsEmergency();
@@ -180,9 +257,28 @@ const sendMessage = async (userId, { conversationId, message }) => {
         content: msg.content,
     }));
 
-    const aiResponse = await getAIChatResponse(messagesForAI, isEmergency);
+    let aiResponse;
+    let providerUnavailable = false;
 
-    await chatHistory.addMessage("assistant", aiResponse, isEmergency);
+    try {
+        aiResponse = await getAIChatResponse(messagesForAI, isEmergency);
+        await chatHistory.addMessage("assistant", aiResponse, isEmergency);
+    } catch (err) {
+        if (isAIProviderErrorForFallback(err)) {
+            providerUnavailable = true;
+            aiResponse = AI_UNAVAILABLE_FALLBACK_MESSAGE;
+
+            logger.warn("AI provider unavailable for chat response", {
+                conversationId,
+                userId: String(userId),
+                error: err.message,
+            });
+
+            await chatHistory.addMessage("assistant", aiResponse, isEmergency);
+        } else {
+            throw err;
+        }
+    }
 
     return {
         conversationId,
@@ -191,6 +287,10 @@ const sendMessage = async (userId, { conversationId, message }) => {
         isEmergency,
         status: chatHistory.status,
         messageCount: chatHistory.messages.length,
+        userMessageCount,
+        maxUserPrompts: CHAT_MAX_USER_PROMPTS,
+        promptLimitReached: userMessageCount >= CHAT_MAX_USER_PROMPTS,
+        providerUnavailable,
     };
 };
 
@@ -221,42 +321,13 @@ const endConversation = async (userId, conversationId) => {
         throw error;
     }
 
-    const messagesForSummary = chatHistory.messages.map((msg) => ({
-        role: msg.role,
-        content: msg.content,
-    }));
-
-    const summary = await generateConversationSummary(messagesForSummary);
-
-    const isEmergency = chatHistory.status === "emergency";
-    if (isEmergency) {
-        summary.urgencyLevel = "emergency";
-    }
-
-    // Run rule-based recommendation engine
-    const recommendation = buildRecommendation(summary, isEmergency);
-
-    // Persist full summary + recommendation fields into chatHistory
-    await chatHistory.completeSummary({
-        ...summary,
-        suggestedCarePath: recommendation.suggestedCarePath,
-        recommendedTreatmentCodes: recommendation.recommendedTreatmentCodes,
-        prakritiType: recommendation.prakritiType,
-        preConsultNote: recommendation.preConsultNote,
-        carePreference: summary.carePreference,
-    });
+    const completion = await completeConversationWithSummary(chatHistory);
 
     return {
         conversationId,
-        summary,
+        summary: completion.summary,
         status: "completed",
-        recommendation: {
-            suggestedCarePath: recommendation.suggestedCarePath,
-            urgencyLevel: recommendation.urgencyLevel,
-            recommendedTreatmentCodes: recommendation.recommendedTreatmentCodes,
-            prakritiType: recommendation.prakritiType,
-            preConsultNote: recommendation.preConsultNote,
-        },
+        recommendation: completion.recommendation,
     };
 };
 

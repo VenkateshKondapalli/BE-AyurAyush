@@ -72,7 +72,7 @@ const authLimiter = rateLimit({
     },
 });
 
-app.use(globalLimiter);
+// app.use(globalLimiter);
 
 app.use(morgan("dev"));
 
@@ -85,8 +85,8 @@ app.get("/", (req, res) => {
 });
 
 // Apply stricter rate limit to auth & OTP endpoints
-app.use("/api/v1/auth", authLimiter);
-app.use("/api/v1/otps", authLimiter);
+// app.use("/api/v1/auth", authLimiter);
+// app.use("/api/v1/otps", authLimiter);
 
 app.use("/api/v1", csrfOriginCheckMiddleware, apiRouter);
 

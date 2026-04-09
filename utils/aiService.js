@@ -1,6 +1,15 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const logger = require("./logger");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_AI_API_KEY);
+const AI_MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 3);
+const AI_RETRY_BASE_MS = Number(process.env.AI_RETRY_BASE_MS || 700);
+const AI_MODEL_CANDIDATES = (
+    process.env.AI_MODEL_CANDIDATES || "gemini-2.5-flash"
+)
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
 
 // Emergency keywords configuration
 const EMERGENCY_KEYWORDS = [
@@ -52,11 +61,12 @@ const SYSTEM_PROMPTS = {
 Your responsibilities:
 - Ask relevant follow-up questions to understand symptoms better
 - Be empathetic, reassuring, and professional
-- Extract key information: specific symptoms, duration, severity, and any other relevant details
+- Extract key information: specific symptoms, duration, and any other relevant details
 - Guide the conversation naturally without overwhelming the patient
 - Keep responses concise (2-4 sentences maximum)
 - DO NOT diagnose or prescribe - only gather information
 - If symptoms seem serious, acknowledge concern and recommend seeing a doctor soon
+- Do not ask the patient to provide a numeric severity score; infer severity from the symptom description and context
 
 Important guidelines:
 - Ask one question at a time
@@ -96,7 +106,7 @@ Extract and return ONLY a valid JSON object with this exact structure (no additi
 Rules:
 - symptoms: array of specific symptoms mentioned
 - duration: string like "3 days", "1 week", "since morning"
-- severity: number 1-10 (1=mild, 10=severe)
+- severity: number 1-10 (1=mild, 10=severe), inferred by AI from the full conversation context and symptom wording, not directly copied from patient self-rating
 - urgencyLevel: must be exactly "normal", "urgent", or "emergency"
 - recommendedSpecialist: one of these: "General Physician", "Cardiologist", "Neurologist", "Orthopedic", "Dermatologist", "ENT Specialist", "Pediatrician", "Gynecologist", "Psychiatrist", "Dentist", "Ophthalmologist", "Gastroenterologist"
 - detailedSummary: clear, concise summary in simple language
@@ -115,55 +125,221 @@ const checkForEmergency = (message) => {
     });
 };
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableAIError = (err) => {
+    const status =
+        err?.status ||
+        err?.statusCode ||
+        err?.response?.status ||
+        err?.response?.statusCode;
+    const message = String(err?.message || "").toLowerCase();
+
+    if ([429, 500, 502, 503, 504].includes(Number(status))) return true;
+
+    return (
+        message.includes("high demand") ||
+        message.includes("service unavailable") ||
+        message.includes("temporarily unavailable") ||
+        message.includes("503") ||
+        message.includes("429") ||
+        message.includes("gateway timeout")
+    );
+};
+
+const isModelNotSupportedError = (err) => {
+    const status =
+        err?.status ||
+        err?.statusCode ||
+        err?.response?.status ||
+        err?.response?.statusCode;
+    const message = String(err?.message || "").toLowerCase();
+
+    return (
+        Number(status) === 404 &&
+        (message.includes("not supported for generatecontent") ||
+            (message.includes("model") && message.includes("not found")))
+    );
+};
+
+const isProviderOriginError = (err) => {
+    const message = String(err?.message || "").toLowerCase();
+    return (
+        message.includes("googlegenerativeai error") ||
+        message.includes("generativelanguage.googleapis.com") ||
+        message.includes("quota exceeded") ||
+        message.includes("rate-limits")
+    );
+};
+
+const createAIUnavailableError = (operation, originalError) => {
+    const error = new Error(
+        "AI service is temporarily busy. Please try again in a few seconds.",
+    );
+    error.statusCode = 503;
+    error.code = "AI_SERVICE_UNAVAILABLE";
+    error.data = {
+        operation,
+        retryable: true,
+        provider: "google-generative-ai",
+    };
+    error.cause = originalError;
+    return error;
+};
+
+const withAIRetry = async (operation, fn) => {
+    let lastError;
+
+    for (let attempt = 1; attempt <= AI_MAX_RETRIES; attempt += 1) {
+        try {
+            return await fn();
+        } catch (err) {
+            lastError = err;
+            const retryable = isRetryableAIError(err);
+            const shouldRetry = retryable && attempt < AI_MAX_RETRIES;
+
+            if (!shouldRetry) break;
+
+            const waitMs =
+                AI_RETRY_BASE_MS * Math.pow(2, attempt - 1) +
+                Math.floor(Math.random() * 200);
+
+            logger.warn("Transient AI provider error, retrying", {
+                operation,
+                attempt,
+                maxRetries: AI_MAX_RETRIES,
+                waitMs,
+                error: err.message,
+            });
+
+            await delay(waitMs);
+        }
+    }
+
+    if (!isRetryableAIError(lastError)) {
+        throw lastError;
+    }
+
+    throw createAIUnavailableError(operation, lastError);
+};
+
+const withAIModelFallback = async (operation, handler) => {
+    const modelsToTry = AI_MODEL_CANDIDATES.length
+        ? AI_MODEL_CANDIDATES
+        : ["gemini-2.5-flash"];
+
+    let lastError;
+
+    for (let index = 0; index < modelsToTry.length; index += 1) {
+        const modelName = modelsToTry[index];
+
+        try {
+            return await withAIRetry(`${operation}:${modelName}`, () =>
+                handler(modelName),
+            );
+        } catch (err) {
+            lastError = err;
+
+            const retryable =
+                err?.code === "AI_SERVICE_UNAVAILABLE" ||
+                isRetryableAIError(err);
+            const modelNotSupported = isModelNotSupportedError(err);
+            const fallbackEligible = retryable || modelNotSupported;
+
+            if (!fallbackEligible) {
+                throw err;
+            }
+
+            const hasAnotherModel = index < modelsToTry.length - 1;
+
+            logger.warn("Switching to fallback AI model", {
+                operation,
+                failedModel: modelName,
+                hasAnotherModel,
+                modelNotSupported,
+                error: err.message,
+            });
+
+            if (!hasAnotherModel) break;
+        }
+    }
+
+    if (
+        !(
+            isRetryableAIError(lastError) ||
+            isModelNotSupportedError(lastError) ||
+            isProviderOriginError(lastError) ||
+            lastError?.code === "AI_SERVICE_UNAVAILABLE"
+        )
+    ) {
+        throw lastError;
+    }
+
+    const unavailableError = createAIUnavailableError(operation, lastError);
+    unavailableError.data = {
+        ...(unavailableError.data || {}),
+        modelsTried: modelsToTry,
+    };
+
+    throw unavailableError;
+};
+
 // Get AI chat response from Gemini
 const getAIChatResponse = async (messages, isEmergency = false) => {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    return withAIModelFallback("chat-response", async (modelName) => {
+        const model = genAI.getGenerativeModel({ model: modelName });
 
-    const systemPrompt = isEmergency
-        ? SYSTEM_PROMPTS.emergency
-        : SYSTEM_PROMPTS.normal;
+        const systemPrompt = isEmergency
+            ? SYSTEM_PROMPTS.emergency
+            : SYSTEM_PROMPTS.normal;
 
-    // Build chat history for Gemini format
-    const history = messages.slice(0, -1).map((msg) => ({
-        role: msg.role === "assistant" ? "model" : "user",
-        parts: [{ text: msg.content }],
-    }));
+        // Build chat history for Gemini format
+        const history = messages.slice(0, -1).map((msg) => ({
+            role: msg.role === "assistant" ? "model" : "user",
+            parts: [{ text: msg.content }],
+        }));
 
-    const chat = model.startChat({
-        history,
-        systemInstruction: { parts: [{ text: systemPrompt }] },
+        const chat = model.startChat({
+            history,
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+        });
+
+        const lastMessage = messages[messages.length - 1];
+        const result = await chat.sendMessage(lastMessage.content);
+        const response = result.response.text();
+
+        return response;
     });
-
-    const lastMessage = messages[messages.length - 1];
-    const result = await chat.sendMessage(lastMessage.content);
-    const response = result.response.text();
-
-    return response;
 };
 
 // Generate conversation summary using Gemini
 const generateConversationSummary = async (messages) => {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const result = await withAIModelFallback(
+        "conversation-summary",
+        async (modelName) => {
+            const model = genAI.getGenerativeModel({ model: modelName });
 
-    const conversationText = messages
-        .map(
-            (msg) =>
-                `${msg.role === "user" ? "Patient" : "Assistant"}: ${msg.content}`,
-        )
-        .join("\n");
+            const conversationText = messages
+                .map(
+                    (msg) =>
+                        `${msg.role === "user" ? "Patient" : "Assistant"}: ${msg.content}`,
+                )
+                .join("\n");
 
-    const result = await model.generateContent({
-        contents: [
-            {
-                role: "user",
-                parts: [
+            return model.generateContent({
+                contents: [
                     {
-                        text: `${SYSTEM_PROMPTS.summary}\n\nConversation:\n${conversationText}`,
+                        role: "user",
+                        parts: [
+                            {
+                                text: `${SYSTEM_PROMPTS.summary}\n\nConversation:\n${conversationText}`,
+                            },
+                        ],
                     },
                 ],
-            },
-        ],
-    });
+            });
+        },
+    );
 
     const responseText = result.response.text().trim();
 
@@ -196,11 +372,6 @@ const generateConversationSummary = async (messages) => {
 };
 
 module.exports = {
-    EMERGENCY_KEYWORDS,
-    SYSTEM_PROMPTS,
-    checkForEmergency,
-    getAIChatResponse,
-    generateConversationSummary,
     EMERGENCY_KEYWORDS,
     SYSTEM_PROMPTS,
     checkForEmergency,
