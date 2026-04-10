@@ -1,7 +1,15 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const logger = require("./logger");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_AI_API_KEY);
+const GEMINI_API_KEYS = (
+    process.env.GEMINI_AI_API_KEYS ||
+    process.env.GEMINI_AI_API_KEY ||
+    ""
+)
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+const genAIClients = GEMINI_API_KEYS.map((key) => new GoogleGenerativeAI(key));
 const AI_MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 3);
 const AI_RETRY_BASE_MS = Number(process.env.AI_RETRY_BASE_MS || 700);
 const AI_MODEL_CANDIDATES = (
@@ -147,6 +155,22 @@ const isRetryableAIError = (err) => {
     );
 };
 
+const isQuotaExceededError = (err) => {
+    const status =
+        err?.status ||
+        err?.statusCode ||
+        err?.response?.status ||
+        err?.response?.statusCode;
+    const message = String(err?.message || "").toLowerCase();
+
+    return (
+        Number(status) === 429 &&
+        (message.includes("quota exceeded") ||
+            message.includes("resource has been exhausted") ||
+            message.includes("rate-limits"))
+    );
+};
+
 const isModelNotSupportedError = (err) => {
     const status =
         err?.status ||
@@ -187,6 +211,21 @@ const createAIUnavailableError = (operation, originalError) => {
     return error;
 };
 
+const createAIQuotaExceededError = (operation, originalError) => {
+    const error = new Error(
+        "AI quota is currently exhausted. Please try again shortly.",
+    );
+    error.statusCode = 429;
+    error.code = "AI_QUOTA_EXCEEDED";
+    error.data = {
+        operation,
+        retryable: false,
+        provider: "google-generative-ai",
+    };
+    error.cause = originalError;
+    return error;
+};
+
 const withAIRetry = async (operation, fn) => {
     let lastError;
 
@@ -194,6 +233,10 @@ const withAIRetry = async (operation, fn) => {
         try {
             return await fn();
         } catch (err) {
+            if (isQuotaExceededError(err)) {
+                throw createAIQuotaExceededError(operation, err);
+            }
+
             lastError = err;
             const retryable = isRetryableAIError(err);
             const shouldRetry = retryable && attempt < AI_MAX_RETRIES;
@@ -224,44 +267,84 @@ const withAIRetry = async (operation, fn) => {
 };
 
 const withAIModelFallback = async (operation, handler) => {
+    if (!genAIClients.length) {
+        const err = new Error(
+            "Gemini API key is missing. Set GEMINI_AI_API_KEY or GEMINI_AI_API_KEYS.",
+        );
+        err.statusCode = 500;
+        throw err;
+    }
+
     const modelsToTry = AI_MODEL_CANDIDATES.length
         ? AI_MODEL_CANDIDATES
         : ["gemini-2.5-flash"];
 
     let lastError;
 
-    for (let index = 0; index < modelsToTry.length; index += 1) {
-        const modelName = modelsToTry[index];
+    for (
+        let providerIndex = 0;
+        providerIndex < genAIClients.length;
+        providerIndex += 1
+    ) {
+        const providerClient = genAIClients[providerIndex];
 
-        try {
-            return await withAIRetry(`${operation}:${modelName}`, () =>
-                handler(modelName),
-            );
-        } catch (err) {
-            lastError = err;
+        for (
+            let modelIndex = 0;
+            modelIndex < modelsToTry.length;
+            modelIndex += 1
+        ) {
+            const modelName = modelsToTry[modelIndex];
 
-            const retryable =
-                err?.code === "AI_SERVICE_UNAVAILABLE" ||
-                isRetryableAIError(err);
-            const modelNotSupported = isModelNotSupportedError(err);
-            const fallbackEligible = retryable || modelNotSupported;
+            try {
+                return await withAIRetry(
+                    `${operation}:key${providerIndex + 1}:${modelName}`,
+                    () =>
+                        handler({
+                            modelName,
+                            providerClient,
+                            providerIndex,
+                        }),
+                );
+            } catch (err) {
+                lastError = err;
 
-            if (!fallbackEligible) {
-                throw err;
+                const retryable =
+                    err?.code === "AI_SERVICE_UNAVAILABLE" ||
+                    err?.code === "AI_QUOTA_EXCEEDED" ||
+                    isRetryableAIError(err);
+                const modelNotSupported = isModelNotSupportedError(err);
+                const fallbackEligible = retryable || modelNotSupported;
+
+                if (!fallbackEligible) {
+                    throw err;
+                }
+
+                const hasAnotherModel = modelIndex < modelsToTry.length - 1;
+                const hasAnotherKey = providerIndex < genAIClients.length - 1;
+
+                logger.warn("Switching to fallback AI model/provider", {
+                    operation,
+                    failedModel: modelName,
+                    providerIndex: providerIndex + 1,
+                    hasAnotherModel,
+                    hasAnotherKey,
+                    modelNotSupported,
+                    quotaExceeded: err?.code === "AI_QUOTA_EXCEEDED",
+                    error: err.message,
+                });
+
+                if (!hasAnotherModel && !hasAnotherKey) break;
             }
-
-            const hasAnotherModel = index < modelsToTry.length - 1;
-
-            logger.warn("Switching to fallback AI model", {
-                operation,
-                failedModel: modelName,
-                hasAnotherModel,
-                modelNotSupported,
-                error: err.message,
-            });
-
-            if (!hasAnotherModel) break;
         }
+    }
+
+    if (lastError?.code === "AI_QUOTA_EXCEEDED") {
+        lastError.data = {
+            ...(lastError.data || {}),
+            providersTried: genAIClients.length,
+            modelsTried: modelsToTry,
+        };
+        throw lastError;
     }
 
     if (
@@ -286,38 +369,45 @@ const withAIModelFallback = async (operation, handler) => {
 
 // Get AI chat response from Gemini
 const getAIChatResponse = async (messages, isEmergency = false) => {
-    return withAIModelFallback("chat-response", async (modelName) => {
-        const model = genAI.getGenerativeModel({ model: modelName });
+    return withAIModelFallback(
+        "chat-response",
+        async ({ modelName, providerClient }) => {
+            const model = providerClient.getGenerativeModel({
+                model: modelName,
+            });
 
-        const systemPrompt = isEmergency
-            ? SYSTEM_PROMPTS.emergency
-            : SYSTEM_PROMPTS.normal;
+            const systemPrompt = isEmergency
+                ? SYSTEM_PROMPTS.emergency
+                : SYSTEM_PROMPTS.normal;
 
-        // Build chat history for Gemini format
-        const history = messages.slice(0, -1).map((msg) => ({
-            role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text: msg.content }],
-        }));
+            // Build chat history for Gemini format
+            const history = messages.slice(0, -1).map((msg) => ({
+                role: msg.role === "assistant" ? "model" : "user",
+                parts: [{ text: msg.content }],
+            }));
 
-        const chat = model.startChat({
-            history,
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-        });
+            const chat = model.startChat({
+                history,
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            });
 
-        const lastMessage = messages[messages.length - 1];
-        const result = await chat.sendMessage(lastMessage.content);
-        const response = result.response.text();
+            const lastMessage = messages[messages.length - 1];
+            const result = await chat.sendMessage(lastMessage.content);
+            const response = result.response.text();
 
-        return response;
-    });
+            return response;
+        },
+    );
 };
 
 // Generate conversation summary using Gemini
 const generateConversationSummary = async (messages) => {
     const result = await withAIModelFallback(
         "conversation-summary",
-        async (modelName) => {
-            const model = genAI.getGenerativeModel({ model: modelName });
+        async ({ modelName, providerClient }) => {
+            const model = providerClient.getGenerativeModel({
+                model: modelName,
+            });
 
             const conversationText = messages
                 .map(

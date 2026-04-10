@@ -65,8 +65,40 @@ const notifyAppointmentBooked = (
 
 const notifyAppointmentApproved = (
     patientEmail,
-    { doctorName, date, timeSlot },
+    {
+        doctorName,
+        date,
+        timeSlot,
+        wasEdited = false,
+        editedFields = [],
+        adminNotes = "",
+    },
 ) => {
+    const formatEditedFields = () => {
+        if (!Array.isArray(editedFields) || editedFields.length === 0)
+            return "";
+
+        const latestByField = new Map();
+        for (const edit of editedFields) {
+            if (edit?.field) latestByField.set(edit.field, edit);
+        }
+
+        const rows = Array.from(latestByField.values())
+            .map((edit) => {
+                const oldVal = edit.oldValue ?? "N/A";
+                const newVal = edit.newValue ?? "N/A";
+                return `<p><strong>${edit.field}:</strong> ${oldVal} → ${newVal}</p>`;
+            })
+            .join("");
+
+        if (!rows) return "";
+        return `<div class="detail"><p><strong>Updated By Admin:</strong></p>${rows}</div>`;
+    };
+
+    const adminNoteBlock = adminNotes
+        ? `<div class="detail"><p><strong>Admin Message:</strong> ${adminNotes}</p></div>`
+        : "";
+
     const body = `
     <p>Your appointment has been <strong>approved</strong> by the admin.</p>
     <div class="detail">
@@ -74,6 +106,8 @@ const notifyAppointmentApproved = (
       <p><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</p>
       <p><strong>Time:</strong> ${timeSlot}</p>
     </div>
+    ${wasEdited ? formatEditedFields() : ""}
+    ${adminNoteBlock}
     <p>Please arrive on time for your consultation.</p>`;
     sendNotification(
         patientEmail,
@@ -164,6 +198,27 @@ const notifyDoctorOnboarded = (
     );
 };
 
+const notifyPatientTurnCalled = (
+    patientEmail,
+    { patientName, doctorName, date, timeSlot, tokenNumber },
+) => {
+    const body = `
+    <p>Hi ${patientName || "Patient"}, it is your turn for consultation.</p>
+    <div class="detail">
+      <p><strong>Doctor:</strong> ${doctorName}</p>
+      <p><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</p>
+      <p><strong>Time:</strong> ${timeSlot}</p>
+      <p><strong>Token:</strong> ${tokenNumber || "N/A"}</p>
+    </div>
+    <p>Please proceed to the consultation area.</p>`;
+    sendNotification(
+        patientEmail,
+        "Your Turn for Consultation - AyurAyush",
+        "Consultation Turn Alert",
+        body,
+    );
+};
+
 module.exports = {
     notifyAppointmentBooked,
     notifyAppointmentApproved,
@@ -171,4 +226,5 @@ module.exports = {
     notifyAppointmentCompleted,
     notifyAppointmentCancelled,
     notifyDoctorOnboarded,
+    notifyPatientTurnCalled,
 };

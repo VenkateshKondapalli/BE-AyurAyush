@@ -38,6 +38,77 @@ const getPatientDashboard = async (userId) => {
         });
     }
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [
+        totalAppointments,
+        upcomingAppointments,
+        completedAppointments,
+        cancelledAppointments,
+        recentAppointmentsDocs,
+    ] = await Promise.all([
+        AppointmentModel.countDocuments({ patientId: userId }),
+        AppointmentModel.countDocuments({
+            patientId: userId,
+            status: { $in: ["pending_admin_approval", "confirmed"] },
+            date: { $gte: todayStart },
+        }),
+        AppointmentModel.countDocuments({
+            patientId: userId,
+            status: "completed",
+        }),
+        AppointmentModel.countDocuments({
+            patientId: userId,
+            status: { $in: ["cancelled", "rejected"] },
+        }),
+        AppointmentModel.find({ patientId: userId })
+            .populate("doctorId", "name email phone profilePhoto")
+            .sort({ date: -1, createdAt: -1 })
+            .limit(5),
+    ]);
+
+    const doctorUserIds = recentAppointmentsDocs
+        .map((apt) => apt.doctorId?._id)
+        .filter(Boolean);
+
+    const doctorProfiles = await DoctorModel.find({
+        userId: { $in: doctorUserIds },
+    }).select("userId specialization qualification consultationFee");
+
+    const doctorMap = new Map(
+        doctorProfiles.map((d) => [d.userId.toString(), d]),
+    );
+
+    const recentAppointments = recentAppointmentsDocs.map((apt) => {
+        const doctorProfile = apt.doctorId
+            ? doctorMap.get(apt.doctorId._id.toString())
+            : null;
+
+        return {
+            appointmentId: apt._id,
+            status: apt.status,
+            urgencyLevel: apt.urgencyLevel,
+            date: apt.date,
+            timeSlot: apt.timeSlot,
+            symptoms: apt.symptoms,
+            tokenNumber: apt.tokenNumber,
+            queueType: apt.queueType,
+            doctor: {
+                userId: apt.doctorId?._id,
+                name: apt.doctorId?.name,
+                email: apt.doctorId?.email,
+                phone: apt.doctorId?.phone,
+                profilePhoto: apt.doctorId?.profilePhoto,
+                specialization: doctorProfile?.specialization,
+                qualification: doctorProfile?.qualification,
+                consultationFee: doctorProfile?.consultationFee,
+            },
+            createdAt: apt.createdAt,
+            adminNotes: apt.adminNotes,
+        };
+    });
+
     return {
         patientId: patient._id,
         userId: patient.userId,
@@ -46,6 +117,13 @@ const getPatientDashboard = async (userId) => {
         medicalHistory: patient.medicalHistory,
         allergies: patient.allergies,
         emergencyContact: patient.emergencyContact,
+        stats: {
+            totalAppointments,
+            upcomingAppointments,
+            completedAppointments,
+            cancelledAppointments,
+        },
+        recentAppointments,
         createdAt: patient.createdAt,
     };
 };
@@ -353,6 +431,10 @@ const getPatientAppointments = async (userId, status, query = {}) => {
         return {
             appointmentId: apt._id,
             status: apt.status,
+            queueStatus: apt.queueStatus,
+            queueCallCount: apt.queueCallCount,
+            lastCalledAt: apt.lastCalledAt,
+            queueNotificationMessage: apt.queueNotificationMessage,
             urgencyLevel: apt.urgencyLevel,
             date: apt.date,
             timeSlot: apt.timeSlot,
@@ -407,6 +489,10 @@ const getAppointmentDetails = async (userId, appointmentId) => {
         appointment: {
             id: appointment._id,
             status: appointment.status,
+            queueStatus: appointment.queueStatus,
+            queueCallCount: appointment.queueCallCount,
+            lastCalledAt: appointment.lastCalledAt,
+            queueNotificationMessage: appointment.queueNotificationMessage,
             urgencyLevel: appointment.urgencyLevel,
             date: appointment.date,
             timeSlot: appointment.timeSlot,

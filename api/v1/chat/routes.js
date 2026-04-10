@@ -9,6 +9,8 @@ const {
     endConversationController,
     getConversationController,
     getPatientConversationsController,
+    deleteConversationSummaryController,
+    deleteConversationController,
 } = require("./controllers");
 const { sendMessageValidator, endConversationValidator } = require("./dto");
 
@@ -54,6 +56,22 @@ chatRouter.get(
     validateLoggedInUserMiddleware,
     validatePatientRole,
     getConversationController,
+);
+
+// Delete only summary for a conversation
+chatRouter.delete(
+    "/:conversationId/summary",
+    validateLoggedInUserMiddleware,
+    validatePatientRole,
+    deleteConversationSummaryController,
+);
+
+// Delete entire conversation if not linked to appointment
+chatRouter.delete(
+    "/:conversationId",
+    validateLoggedInUserMiddleware,
+    validatePatientRole,
+    deleteConversationController,
 );
 
 module.exports = { chatRouter };

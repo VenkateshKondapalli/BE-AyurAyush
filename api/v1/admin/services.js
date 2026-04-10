@@ -11,15 +11,18 @@ const {
 } = require("../../../models/doctorAvailabilitySchema");
 const { UserModel, ROLE_OPTIONS } = require("../../../models/userSchema");
 const { PatientModel } = require("../../../models/patientSchema");
+const { QueueTokenModel } = require("../../../models/queueTokenSchema");
 const {
     calculateAge,
     calculateWaitingTime,
+    generateTokenNumber,
     parsePagination,
 } = require("../../../utils/helpers");
 const {
     notifyAppointmentApproved,
     notifyAppointmentRejected,
     notifyDoctorOnboarded,
+    notifyPatientTurnCalled,
 } = require("../../../utils/appointmentNotifications");
 
 const generateTemporaryPassword = customAlphabet(
@@ -27,13 +30,89 @@ const generateTemporaryPassword = customAlphabet(
     12,
 );
 
+const assignTokenIfMissing = async (appointment) => {
+    if (!appointment || appointment.tokenNumber) {
+        return appointment;
+    }
+
+    const queueDate = new Date(appointment.date).toISOString().slice(0, 10);
+    const queueType = appointment.queueType || "normal";
+    const doctorId = appointment.doctorId?._id || appointment.doctorId;
+
+    const tokenDoc = await QueueTokenModel.findOneAndUpdate(
+        { queueDate, doctorId, queueType },
+        { $inc: { lastSequence: 1 } },
+        { upsert: true, new: true },
+    );
+
+    const tokenSequence = tokenDoc.lastSequence;
+    appointment.tokenSequence = tokenSequence;
+    appointment.queueDate = queueDate;
+    appointment.tokenNumber = generateTokenNumber(
+        queueDate,
+        doctorId,
+        tokenSequence,
+    );
+    await appointment.save();
+    return appointment;
+};
+
 const getDashboardStats = async () => {
-    const [totalUsers, totalDoctors, totalPatients] = await Promise.all([
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const [
+        totalUsers,
+        totalDoctors,
+        totalPatients,
+        todayAppointments,
+        pendingApprovals,
+        recentAppointmentsDocs,
+    ] = await Promise.all([
         UserModel.countDocuments(),
         UserModel.countDocuments({ roles: "doctor" }),
         UserModel.countDocuments({ roles: "patient" }),
+        AppointmentModel.countDocuments({
+            date: { $gte: todayStart, $lte: todayEnd },
+            status: { $nin: ["cancelled", "rejected"] },
+        }),
+        AppointmentModel.countDocuments({ status: "pending_admin_approval" }),
+        AppointmentModel.find({})
+            .populate("patientId", "name")
+            .populate("doctorId", "name")
+            .sort({ createdAt: -1 })
+            .limit(10),
     ]);
-    return { totalUsers, totalDoctors, totalPatients };
+
+    const recentAppointments = recentAppointmentsDocs.map((apt) => ({
+        appointmentId: apt._id,
+        patient: {
+            id: apt.patientId?._id,
+            name: apt.patientId?.name || "Unknown",
+        },
+        doctor: {
+            id: apt.doctorId?._id,
+            name: apt.doctorId?.name || "Unassigned",
+        },
+        date: apt.date,
+        timeSlot: apt.timeSlot,
+        urgencyLevel: apt.urgencyLevel,
+        status: apt.status,
+        createdAt: apt.createdAt,
+    }));
+
+    return {
+        stats: {
+            totalUsers,
+            totalDoctors,
+            totalPatients,
+            todayAppointments,
+            pendingApprovals,
+        },
+        recentAppointments,
+    };
 };
 
 const createDoctorAccountByAdmin = async (adminUserId, payload) => {
@@ -214,8 +293,6 @@ const getPendingNormalAppointments = async (query = {}) => {
 
     const [appointments, totalCount] = await Promise.all([
         AppointmentModel.find(filter)
-            .populate("patientId", "name email phone gender dob")
-            .populate("doctorId", "name email phone")
             .sort({ createdAt: 1 })
             .skip(skip)
             .limit(limit),
@@ -223,7 +300,9 @@ const getPendingNormalAppointments = async (query = {}) => {
     ]);
 
     // Batch fetch all doctor profiles in one query
-    const doctorUserIds = appointments.map((apt) => apt.doctorId._id);
+    const doctorUserIds = appointments
+        .map((apt) => apt.doctorId?._id || apt.doctorId)
+        .filter(Boolean);
     const doctorProfiles = await DoctorModel.find({
         userId: { $in: doctorUserIds },
     }).select("userId specialization qualification experience");
@@ -231,24 +310,82 @@ const getPendingNormalAppointments = async (query = {}) => {
         doctorProfiles.map((d) => [d.userId.toString(), d]),
     );
 
+    const patientUserIds = appointments
+        .map((apt) => apt.patientId?._id || apt.patientId)
+        .filter(Boolean)
+        .map((id) => id.toString());
+    const doctorResolvedUserIds = appointments
+        .map((apt) => apt.doctorId?._id || apt.doctorId)
+        .filter(Boolean)
+        .map((id) => id.toString());
+
+    const [patientProfilesById, doctorProfilesById] = await Promise.all([
+        PatientModel.find({ _id: { $in: patientUserIds } })
+            .select("_id userId")
+            .lean(),
+        DoctorModel.find({ _id: { $in: doctorResolvedUserIds } })
+            .select("_id userId")
+            .lean(),
+    ]);
+
+    const patientProfileMap = new Map(
+        patientProfilesById.map((p) => [p._id.toString(), p.userId.toString()]),
+    );
+    const doctorProfileMap = new Map(
+        doctorProfilesById.map((d) => [d._id.toString(), d.userId.toString()]),
+    );
+
+    const resolvedPatientUserIds = patientUserIds.map(
+        (id) => patientProfileMap.get(id) || id,
+    );
+    const resolvedDoctorUserIds = doctorResolvedUserIds.map(
+        (id) => doctorProfileMap.get(id) || id,
+    );
+
+    const users = await UserModel.find({
+        _id: {
+            $in: [
+                ...new Set([
+                    ...resolvedPatientUserIds,
+                    ...resolvedDoctorUserIds,
+                ]),
+            ],
+        },
+    }).select("name email phone gender dob");
+    const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
     const result = appointments.map((apt) => {
-        const doctor = doctorMap.get(apt.doctorId._id.toString());
+        const rawDoctorId = (apt.doctorId?._id || apt.doctorId)?.toString();
+        const rawPatientId = (apt.patientId?._id || apt.patientId)?.toString();
+        const doctorUserId = doctorProfileMap.get(rawDoctorId) || rawDoctorId;
+        const patientUserId =
+            patientProfileMap.get(rawPatientId) || rawPatientId;
+
+        const doctor = doctorMap.get(doctorUserId);
+        const patientUser = userMap.get(patientUserId);
+        const doctorUser = userMap.get(doctorUserId);
 
         return {
             appointmentId: apt._id,
+            status: apt.status,
+            urgencyLevel: apt.urgencyLevel,
+            date: apt.date,
+            timeSlot: apt.timeSlot,
             patient: {
-                id: apt.patientId._id,
-                name: apt.patientId.name,
-                email: apt.patientId.email,
-                phone: apt.patientId.phone,
-                gender: apt.patientId.gender,
-                age: calculateAge(apt.patientId.dob),
+                id: patientUserId,
+                name: apt.patientId?.name || patientUser?.name || "Unknown",
+                email: apt.patientId?.email || patientUser?.email,
+                phone: apt.patientId?.phone || patientUser?.phone,
+                gender: apt.patientId?.gender || patientUser?.gender,
+                age: calculateAge(apt.patientId?.dob || patientUser?.dob),
             },
             doctor: {
-                id: apt.doctorId._id,
-                name: apt.doctorId.name,
+                id: doctorUserId,
+                name: apt.doctorId?.name || doctorUser?.name || "Unassigned",
                 specialization: doctor?.specialization,
             },
+            patientName: apt.patientId?.name || patientUser?.name || "Unknown",
+            doctorName: apt.doctorId?.name || doctorUser?.name || "Unassigned",
             appointmentDetails: {
                 date: apt.date,
                 timeSlot: apt.timeSlot,
@@ -279,8 +416,6 @@ const getEmergencyAppointments = async (query = {}) => {
 
     const [appointments, totalCount] = await Promise.all([
         AppointmentModel.find(filter)
-            .populate("patientId", "name email phone gender dob")
-            .populate("doctorId", "name email phone")
             .sort({ createdAt: 1 })
             .skip(skip)
             .limit(limit),
@@ -288,44 +423,103 @@ const getEmergencyAppointments = async (query = {}) => {
     ]);
 
     // Batch fetch doctor profiles and chat histories in parallel
-    const doctorUserIds = appointments.map((apt) => apt.doctorId._id);
+    const doctorUserIds = appointments
+        .map((apt) => apt.doctorId?._id || apt.doctorId)
+        .filter(Boolean);
     const conversationIds = appointments
         .map((apt) => apt.chatConversationId)
         .filter(Boolean);
 
-    const [doctorProfiles, chatHistories] = await Promise.all([
+    const patientUserIds = appointments
+        .map((apt) => apt.patientId?._id || apt.patientId)
+        .filter(Boolean)
+        .map((id) => id.toString());
+    const doctorResolvedUserIds = appointments
+        .map((apt) => apt.doctorId?._id || apt.doctorId)
+        .filter(Boolean)
+        .map((id) => id.toString());
+
+    const [patientProfilesById, doctorProfilesById] = await Promise.all([
+        PatientModel.find({ _id: { $in: patientUserIds } })
+            .select("_id userId")
+            .lean(),
+        DoctorModel.find({ _id: { $in: doctorResolvedUserIds } })
+            .select("_id userId")
+            .lean(),
+    ]);
+
+    const patientProfileMap = new Map(
+        patientProfilesById.map((p) => [p._id.toString(), p.userId.toString()]),
+    );
+    const doctorProfileMap = new Map(
+        doctorProfilesById.map((d) => [d._id.toString(), d.userId.toString()]),
+    );
+
+    const resolvedPatientUserIds = patientUserIds.map(
+        (id) => patientProfileMap.get(id) || id,
+    );
+    const resolvedDoctorUserIds = doctorResolvedUserIds.map(
+        (id) => doctorProfileMap.get(id) || id,
+    );
+
+    const [doctorProfiles, chatHistories, users] = await Promise.all([
         DoctorModel.find({ userId: { $in: doctorUserIds } }).select(
             "userId specialization qualification experience",
         ),
         ChatHistoryModel.find({
             conversationId: { $in: conversationIds },
         }).select("conversationId messages"),
+        UserModel.find({
+            _id: {
+                $in: [
+                    ...new Set([
+                        ...resolvedPatientUserIds,
+                        ...resolvedDoctorUserIds,
+                    ]),
+                ],
+            },
+        }).select("name email phone gender dob"),
     ]);
 
     const doctorMap = new Map(
         doctorProfiles.map((d) => [d.userId.toString(), d]),
     );
     const chatMap = new Map(chatHistories.map((c) => [c.conversationId, c]));
+    const userMap = new Map(users.map((u) => [u._id.toString(), u]));
 
     const result = appointments.map((apt) => {
-        const doctor = doctorMap.get(apt.doctorId._id.toString());
+        const rawDoctorId = (apt.doctorId?._id || apt.doctorId)?.toString();
+        const rawPatientId = (apt.patientId?._id || apt.patientId)?.toString();
+        const doctorUserId = doctorProfileMap.get(rawDoctorId) || rawDoctorId;
+        const patientUserId =
+            patientProfileMap.get(rawPatientId) || rawPatientId;
+
+        const doctor = doctorMap.get(doctorUserId);
+        const patientUser = userMap.get(patientUserId);
+        const doctorUser = userMap.get(doctorUserId);
         const chatHistory = chatMap.get(apt.chatConversationId);
 
         return {
             appointmentId: apt._id,
+            status: apt.status,
+            urgencyLevel: apt.urgencyLevel,
+            date: apt.date,
+            timeSlot: apt.timeSlot,
             patient: {
-                id: apt.patientId._id,
-                name: apt.patientId.name,
-                email: apt.patientId.email,
-                phone: apt.patientId.phone,
-                gender: apt.patientId.gender,
-                age: calculateAge(apt.patientId.dob),
+                id: patientUserId,
+                name: apt.patientId?.name || patientUser?.name || "Unknown",
+                email: apt.patientId?.email || patientUser?.email,
+                phone: apt.patientId?.phone || patientUser?.phone,
+                gender: apt.patientId?.gender || patientUser?.gender,
+                age: calculateAge(apt.patientId?.dob || patientUser?.dob),
             },
             doctor: {
-                id: apt.doctorId._id,
-                name: apt.doctorId.name,
+                id: doctorUserId,
+                name: apt.doctorId?.name || doctorUser?.name || "Unassigned",
                 specialization: doctor?.specialization,
             },
+            patientName: apt.patientId?.name || patientUser?.name || "Unknown",
+            doctorName: apt.doctorId?.name || doctorUser?.name || "Unassigned",
             appointmentDetails: {
                 date: apt.date,
                 timeSlot: apt.timeSlot,
@@ -346,6 +540,106 @@ const getEmergencyAppointments = async (query = {}) => {
         page,
         totalPages: Math.ceil(totalCount / limit),
         appointments: result,
+    };
+};
+
+const getTodayQueue = async () => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const appointments = await AppointmentModel.find({
+        date: { $gte: todayStart, $lte: todayEnd },
+        status: "confirmed",
+    })
+        .populate("patientId", "name email")
+        .populate("doctorId", "name")
+        .sort({ tokenSequence: 1, timeSlot: 1, createdAt: 1 });
+
+    const normalizedAppointments = await Promise.all(
+        appointments.map(assignTokenIfMissing),
+    );
+
+    const queue = normalizedAppointments.map((apt) => ({
+        appointmentId: apt._id,
+        tokenNumber: apt.tokenNumber,
+        queueStatus: apt.queueStatus || "waiting",
+        queueCallCount: apt.queueCallCount || 0,
+        lastCalledAt: apt.lastCalledAt,
+        date: apt.date,
+        timeSlot: apt.timeSlot,
+        patient: {
+            id: apt.patientId?._id,
+            name: apt.patientId?.name || "Patient",
+            email: apt.patientId?.email,
+        },
+        doctor: {
+            id: apt.doctorId?._id,
+            name: apt.doctorId?.name || "Unassigned",
+        },
+    }));
+
+    return {
+        count: queue.length,
+        appointments: queue,
+    };
+};
+
+const callTodayQueuePatient = async (appointmentId, adminUserId) => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const appointment = await AppointmentModel.findOne({
+        _id: appointmentId,
+        date: { $gte: todayStart, $lte: todayEnd },
+        status: "confirmed",
+    })
+        .populate("patientId", "name email")
+        .populate("doctorId", "name");
+
+    if (!appointment) {
+        const err = new Error("Today's confirmed appointment not found");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    await assignTokenIfMissing(appointment);
+
+    const now = new Date();
+    const firstCall = !appointment.firstCallEmailSentAt;
+
+    appointment.queueStatus = "called";
+    appointment.queueCallCount = (appointment.queueCallCount || 0) + 1;
+    appointment.lastCalledAt = now;
+    appointment.queueNotificationMessage = firstCall
+        ? "Please proceed to consultation area."
+        : "Reminder: Your consultation turn is active.";
+    appointment.adminApprovedBy = appointment.adminApprovedBy || adminUserId;
+
+    if (firstCall) {
+        appointment.firstCallEmailSentAt = now;
+        notifyPatientTurnCalled(appointment.patientId?.email, {
+            patientName: appointment.patientId?.name,
+            doctorName: appointment.doctorId?.name || "Doctor",
+            date: appointment.date,
+            timeSlot: appointment.timeSlot,
+            tokenNumber: appointment.tokenNumber,
+        });
+    }
+
+    await appointment.save();
+
+    return {
+        appointmentId: appointment._id,
+        queueStatus: appointment.queueStatus,
+        queueCallCount: appointment.queueCallCount,
+        firstCallEmailSent: firstCall,
+        notificationMode: firstCall ? "email_and_in_app" : "in_app_only",
+        patientName: appointment.patientId?.name || "Patient",
+        tokenNumber: appointment.tokenNumber,
     };
 };
 
@@ -420,6 +714,9 @@ const approveAppointment = async (
         doctorName: updatedAppointment.doctorId.name,
         date: updatedAppointment.date,
         timeSlot: updatedAppointment.timeSlot,
+        wasEdited: !!edits,
+        editedFields: updatedAppointment.adminEditedFields || [],
+        adminNotes: adminNotes || updatedAppointment.adminNotes || "",
     });
 
     return {
@@ -534,17 +831,33 @@ const getVerifiedDoctorsForAdmin = async (query = {}) => {
         DoctorModel.countDocuments(doctorQuery),
     ]);
 
-    const doctorUserIds = doctors.map((d) => d.userId);
-    const users = await UserModel.find({
+    const doctorUserIds = doctors.map((d) => d.userId.toString());
+
+    const fallbackDoctorRefs = await DoctorModel.find({
         _id: { $in: doctorUserIds },
-        isActive: true,
-    }).select("name email phone gender profilePhoto");
+    })
+        .select("_id userId")
+        .lean();
+
+    const fallbackDoctorRefMap = new Map(
+        fallbackDoctorRefs.map((d) => [d._id.toString(), d.userId.toString()]),
+    );
+
+    const resolvedUserIds = doctorUserIds.map(
+        (id) => fallbackDoctorRefMap.get(id) || id,
+    );
+
+    const users = await UserModel.find({
+        _id: { $in: [...new Set(resolvedUserIds)] },
+    }).select("name email phone gender profilePhoto isActive");
+    const userMap = new Map(users.map((u) => [u._id.toString(), u]));
 
     const doctorList = doctors
         .map((doc) => {
-            const user = users.find(
-                (u) => u._id.toString() === doc.userId.toString(),
-            );
+            const resolvedUserId =
+                fallbackDoctorRefMap.get(doc.userId.toString()) ||
+                doc.userId.toString();
+            const user = userMap.get(resolvedUserId);
             if (!user) return null;
 
             return {
@@ -554,6 +867,8 @@ const getVerifiedDoctorsForAdmin = async (query = {}) => {
                 phone: user.phone,
                 gender: user.gender,
                 profilePhoto: user.profilePhoto,
+                isActive: !!user.isActive,
+                status: user.isActive ? "active" : "inactive",
                 specialization: doc.specialization,
                 qualification: doc.qualification,
                 experience: doc.experience,
@@ -696,6 +1011,23 @@ const offlineBookAppointment = async (adminId, bookingData) => {
                 { session },
             );
             appointment = createdAppointments[0];
+
+            const queueDate = new Date(date).toISOString().slice(0, 10);
+            const queueType = appointment.queueType || "normal";
+            const tokenDoc = await QueueTokenModel.findOneAndUpdate(
+                { queueDate, doctorId, queueType },
+                { $inc: { lastSequence: 1 } },
+                { upsert: true, new: true, session },
+            );
+
+            appointment.tokenSequence = tokenDoc.lastSequence;
+            appointment.queueDate = queueDate;
+            appointment.tokenNumber = generateTokenNumber(
+                queueDate,
+                doctorId,
+                tokenDoc.lastSequence,
+            );
+            await appointment.save({ session });
         });
     } finally {
         await session.endSession();
@@ -728,4 +1060,6 @@ module.exports = {
     offlineBookAppointment,
     getVerifiedDoctorsForAdmin,
     getDoctorAvailableSlotsForAdmin,
+    getTodayQueue,
+    callTodayQueuePatient,
 };

@@ -21,12 +21,78 @@ const getDoctorDashboard = async (userId) => {
         });
     }
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const [
+        todayAppointmentsCount,
+        pendingAppointments,
+        completedToday,
+        totalPatientsAgg,
+        todayAppointmentsDocs,
+    ] = await Promise.all([
+        AppointmentModel.countDocuments({
+            doctorId: userId,
+            status: { $nin: ["rejected"] },
+            date: { $gte: todayStart, $lte: todayEnd },
+        }),
+        AppointmentModel.countDocuments({
+            doctorId: userId,
+            status: "pending_admin_approval",
+        }),
+        AppointmentModel.countDocuments({
+            doctorId: userId,
+            status: "completed",
+            date: { $gte: todayStart, $lte: todayEnd },
+        }),
+        AppointmentModel.aggregate([
+            {
+                $match: {
+                    doctorId: userId,
+                    status: { $nin: ["rejected"] },
+                },
+            },
+            { $group: { _id: "$patientId" } },
+            { $count: "count" },
+        ]),
+        AppointmentModel.find({
+            doctorId: userId,
+            status: { $nin: ["rejected"] },
+            date: { $gte: todayStart, $lte: todayEnd },
+        })
+            .populate("patientId", "name")
+            .sort({ timeSlot: 1, createdAt: 1 })
+            .limit(10),
+    ]);
+
+    const totalPatients = totalPatientsAgg[0]?.count || 0;
+    const todayAppointments = todayAppointmentsDocs.map((apt) => ({
+        appointmentId: apt._id,
+        patient: {
+            id: apt.patientId?._id,
+            name: apt.patientId?.name || "Patient",
+        },
+        timeSlot: apt.timeSlot,
+        status: apt.status,
+        urgencyLevel: apt.urgencyLevel,
+        date: apt.date,
+    }));
+
     return {
         doctorId: doctor._id,
         userId: doctor.userId,
         specialization: doctor.specialization,
         experience: doctor.experience,
         isVerified: doctor.isVerified,
+        stats: {
+            todayAppointments: todayAppointmentsCount,
+            pendingAppointments,
+            completedAppointments: completedToday,
+            totalPatients,
+        },
+        todayAppointments,
         createdAt: doctor.createdAt,
     };
 };
@@ -125,7 +191,7 @@ const getTodayAppointments = async (userId) => {
 
     const appointments = await AppointmentModel.find({
         doctorId: userId,
-        status: "confirmed",
+        status: { $nin: ["rejected"] },
         date: { $gte: todayStart, $lte: todayEnd },
     })
         .populate("patientId", "name email phone gender dob profilePhoto")
@@ -145,6 +211,8 @@ const getTodayAppointments = async (userId) => {
 
         return {
             appointmentId: apt._id,
+            status: apt.status,
+            date: apt.date,
             urgencyLevel: apt.urgencyLevel,
             timeSlot: apt.timeSlot,
             patient: {

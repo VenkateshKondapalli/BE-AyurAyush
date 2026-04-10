@@ -17,6 +17,7 @@ required.forEach((key) => {
 
 const logger = require("./utils/logger");
 const { csrfOriginCheckMiddleware } = require("./utils/csrfProtection");
+const { startChatRetentionJob } = require("./utils/chatRetentionJob");
 
 const { apiRouter } = require("./api/v1/routes");
 const { errorHandler } = require("./api/v1/errorHandler");
@@ -36,13 +37,29 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
+const configuredFrontendOrigins = [
+    process.env.FRONTEND_URL_LOCAL,
+    process.env.FRONTEND_URL_VERCEL,
+    process.env.FRONTEND_URL_CUSTOM_DOMAIN,
+].filter(Boolean);
+
+const localhostDevOriginPattern = /^http:\/\/localhost:\d+$/;
+
 app.use(
     cors({
-        origin: [
-            process.env.FRONTEND_URL_LOCAL,
-            process.env.FRONTEND_URL_VERCEL,
-            process.env.FRONTEND_URL_CUSTOM_DOMAIN,
-        ],
+        origin: (origin, callback) => {
+            // Allow same-origin/non-browser tools where Origin may be undefined.
+            if (!origin) return callback(null, true);
+
+            const isConfigured = configuredFrontendOrigins.includes(origin);
+            const isLocalDev = localhostDevOriginPattern.test(origin);
+
+            if (isConfigured || isLocalDev) {
+                return callback(null, true);
+            }
+
+            return callback(new Error(`CORS blocked for origin: ${origin}`));
+        },
         credentials: true,
         methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     }),
@@ -95,4 +112,5 @@ app.use(errorHandler);
 
 app.listen(process.env.PORT, () => {
     logger.info("Server started", { port: process.env.PORT });
+    startChatRetentionJob();
 });

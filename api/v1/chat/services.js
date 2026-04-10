@@ -9,6 +9,15 @@ const {
 } = require("../../../utils/aiService");
 
 const CHAT_MAX_USER_PROMPTS = Number(process.env.CHAT_MAX_USER_PROMPTS || 30);
+const CHAT_RECOMMENDED_END_AFTER_PROMPTS = Number(
+    process.env.CHAT_RECOMMENDED_END_AFTER_PROMPTS || 3,
+);
+const CHAT_SUMMARY_RETENTION_DAYS = Number(
+    process.env.CHAT_SUMMARY_RETENTION_DAYS || 90,
+);
+const CHAT_MESSAGES_RETENTION_DAYS = Number(
+    process.env.CHAT_MESSAGES_RETENTION_DAYS || 30,
+);
 const AI_UNAVAILABLE_FALLBACK_MESSAGE =
     "Our AI assistant is currently experiencing high demand. Please wait a few seconds and send your message again.";
 
@@ -21,6 +30,7 @@ const isAIProviderErrorForFallback = (err) => {
     const message = String(err?.message || "").toLowerCase();
 
     if (err?.code === "AI_SERVICE_UNAVAILABLE") return true;
+    if (err?.code === "AI_QUOTA_EXCEEDED") return true;
     if ([429, 500, 502, 503, 504].includes(Number(status))) return true;
 
     return (
@@ -31,6 +41,54 @@ const isAIProviderErrorForFallback = (err) => {
         message.includes("rate-limits") ||
         message.includes("not supported for generatecontent")
     );
+};
+
+const FALLBACK_SUMMARY_NOTE =
+    "AI summary was unavailable, so a quick summary was prepared from your chat.";
+
+const buildLocalSummaryFallback = (messages, isEmergency) => {
+    const userMessages = messages
+        .filter((msg) => msg.role === "user")
+        .map((msg) => msg.content)
+        .join(" ");
+
+    const source = userMessages.toLowerCase();
+    const knownSymptoms = [
+        "fever",
+        "cough",
+        "cold",
+        "headache",
+        "chest pain",
+        "breathing",
+        "stomach",
+        "vomiting",
+        "nausea",
+        "back pain",
+        "joint pain",
+        "fatigue",
+        "dizziness",
+        "rash",
+    ];
+
+    const symptoms = knownSymptoms.filter((s) => source.includes(s));
+    const durationMatch = userMessages.match(
+        /\b(\d+\s*(?:day|days|week|weeks|month|months|hour|hours)|since\s+\w+)\b/i,
+    );
+
+    return {
+        symptoms: symptoms.length ? symptoms : ["General discomfort"],
+        duration: durationMatch?.[1] || "Not specified",
+        severity: isEmergency ? 9 : 5,
+        urgencyLevel: isEmergency ? "emergency" : "normal",
+        recommendedSpecialist: "General Physician",
+        detailedSummary:
+            userMessages.slice(0, 350) ||
+            "Please review conversation history for full details.",
+        carePreference: null,
+        prakritiType: null,
+        summarySource: "local-fallback",
+        summaryNote: FALLBACK_SUMMARY_NOTE,
+    };
 };
 // ── Panchakarma/Ayurveda symptom indicators ──────────────────────────────────
 const PANCHAKARMA_INDICATORS = [
@@ -155,8 +213,27 @@ const completeConversationWithSummary = async (chatHistory) => {
         content: msg.content,
     }));
 
-    const summary = await generateConversationSummary(messagesForSummary);
     const isEmergency = chatHistory.status === "emergency";
+    let providerUnavailable = false;
+    let summary;
+
+    try {
+        summary = await generateConversationSummary(messagesForSummary);
+    } catch (err) {
+        if (!isAIProviderErrorForFallback(err)) {
+            throw err;
+        }
+
+        providerUnavailable = true;
+        summary = buildLocalSummaryFallback(messagesForSummary, isEmergency);
+
+        logger.warn("AI provider unavailable for conversation summary", {
+            conversationId: chatHistory.conversationId,
+            userId: String(chatHistory.patientId),
+            error: err.message,
+            fallback: "local-summary",
+        });
+    }
 
     if (isEmergency) {
         summary.urgencyLevel = "emergency";
@@ -175,6 +252,7 @@ const completeConversationWithSummary = async (chatHistory) => {
 
     return {
         summary,
+        providerUnavailable,
         recommendation: {
             suggestedCarePath: recommendation.suggestedCarePath,
             urgencyLevel: recommendation.urgencyLevel,
@@ -289,6 +367,9 @@ const sendMessage = async (userId, { conversationId, message }) => {
         messageCount: chatHistory.messages.length,
         userMessageCount,
         maxUserPrompts: CHAT_MAX_USER_PROMPTS,
+        recommendedEndAfterPrompts: CHAT_RECOMMENDED_END_AFTER_PROMPTS,
+        recommendEndChat:
+            userMessageCount >= CHAT_RECOMMENDED_END_AFTER_PROMPTS,
         promptLimitReached: userMessageCount >= CHAT_MAX_USER_PROMPTS,
         providerUnavailable,
     };
@@ -328,6 +409,7 @@ const endConversation = async (userId, conversationId) => {
         summary: completion.summary,
         status: "completed",
         recommendation: completion.recommendation,
+        providerUnavailable: completion.providerUnavailable,
     };
 };
 
@@ -359,7 +441,7 @@ const getPatientConversations = async (userId, query = {}) => {
     const [conversations, totalCount] = await Promise.all([
         ChatHistoryModel.find(filter)
             .select(
-                "conversationId status summary.symptoms summary.urgencyLevel createdAt appointmentId",
+                "conversationId status summaryStatus summary.symptoms summary.urgencyLevel createdAt appointmentId",
             )
             .sort({ createdAt: -1 })
             .skip(skip)
@@ -376,10 +458,108 @@ const getPatientConversations = async (userId, query = {}) => {
     };
 };
 
+const deleteConversationSummary = async (userId, conversationId) => {
+    const chatHistory = await ChatHistoryModel.findOne({
+        conversationId,
+        patientId: userId,
+    });
+
+    if (!chatHistory) {
+        const error = new Error("Conversation not found");
+        error.statusCode = 404;
+        throw error;
+    }
+
+    chatHistory.summary = undefined;
+    chatHistory.summaryStatus = "deleted";
+    chatHistory.summaryDeletedAt = new Date();
+    await chatHistory.save();
+
+    return {
+        conversationId,
+        summaryStatus: chatHistory.summaryStatus,
+        summaryDeletedAt: chatHistory.summaryDeletedAt,
+    };
+};
+
+const deleteConversation = async (userId, conversationId) => {
+    const chatHistory = await ChatHistoryModel.findOne({
+        conversationId,
+        patientId: userId,
+    });
+
+    if (!chatHistory) {
+        const error = new Error("Conversation not found");
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (chatHistory.appointmentId) {
+        const error = new Error(
+            "Cannot delete conversation already linked to an appointment.",
+        );
+        error.statusCode = 409;
+        throw error;
+    }
+
+    await ChatHistoryModel.deleteOne({ _id: chatHistory._id });
+
+    return {
+        conversationId,
+        deleted: true,
+    };
+};
+
+const runChatRetentionCleanup = async () => {
+    const now = Date.now();
+    const summaryCutoff = new Date(
+        now - CHAT_SUMMARY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const messagesCutoff = new Date(
+        now - CHAT_MESSAGES_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const [summaryCleanupResult, messagesCleanupResult] = await Promise.all([
+        ChatHistoryModel.updateMany(
+            {
+                status: "completed",
+                summaryStatus: { $ne: "deleted" },
+                updatedAt: { $lt: summaryCutoff },
+            },
+            {
+                $unset: { summary: "" },
+                $set: {
+                    summaryStatus: "deleted",
+                    summaryDeletedAt: new Date(),
+                },
+            },
+        ),
+        ChatHistoryModel.updateMany(
+            {
+                updatedAt: { $lt: messagesCutoff },
+                "messages.0": { $exists: true },
+            },
+            {
+                $set: { messages: [], messagesPrunedAt: new Date() },
+            },
+        ),
+    ]);
+
+    return {
+        summariesDeleted: summaryCleanupResult.modifiedCount || 0,
+        messagesPruned: messagesCleanupResult.modifiedCount || 0,
+        summaryCutoff,
+        messagesCutoff,
+    };
+};
+
 module.exports = {
     startConversation,
     sendMessage,
     endConversation,
     getConversation,
     getPatientConversations,
+    deleteConversationSummary,
+    deleteConversation,
+    runChatRetentionCleanup,
 };

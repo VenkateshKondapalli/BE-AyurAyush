@@ -4,6 +4,8 @@ const {
     endConversation,
     getConversation,
     getPatientConversations,
+    deleteConversationSummary,
+    deleteConversation,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
@@ -96,10 +98,50 @@ const getPatientConversationsController = async (req, res, next) => {
     }
 };
 
+const deleteConversationSummaryController = async (req, res, next) => {
+    try {
+        const data = await deleteConversationSummary(
+            req.currentPatient.userId,
+            req.params.conversationId,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Conversation summary deleted",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in deleteConversationSummaryController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const deleteConversationController = async (req, res, next) => {
+    try {
+        const data = await deleteConversation(
+            req.currentPatient.userId,
+            req.params.conversationId,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Conversation deleted",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in deleteConversationController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
 module.exports = {
     startConversationController,
     sendMessageController,
     endConversationController,
     getConversationController,
     getPatientConversationsController,
+    deleteConversationSummaryController,
+    deleteConversationController,
 };

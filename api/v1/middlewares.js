@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { ROLE_OPTIONS } = require("../../models/userSchema");
+const { UserModel } = require("../../models/userSchema");
 const logger = require("../../utils/logger");
 
 const validateLoggedInUserMiddleware = (req, res, next) => {
@@ -22,7 +23,7 @@ const validateLoggedInUserMiddleware = (req, res, next) => {
             authorization,
             process.env.JWT_SECRET,
             { algorithms: ["HS256"] },
-            (err, data) => {
+            async (err, data) => {
                 if (err) {
                     logger.warn("Invalid token", {
                         path: req.originalUrl,
@@ -35,12 +36,45 @@ const validateLoggedInUserMiddleware = (req, res, next) => {
                     });
                 }
 
-                logger.debug("Validated logged in user", {
-                    userId: data?.userId,
-                    roles: data?.roles,
-                });
-                req.currentUser = data;
-                return next();
+                try {
+                    // Always hydrate roles from DB so authorization checks don't rely on stale JWT role claims.
+                    const userDoc = await UserModel.findById(
+                        data.userId,
+                    ).select("roles isActive mustChangePassword");
+
+                    if (!userDoc || userDoc.isActive === false) {
+                        return res.status(401).json({
+                            isSuccess: false,
+                            message: "User not logged in!",
+                        });
+                    }
+
+                    const hydratedUser = {
+                        ...data,
+                        roles: userDoc.roles || [],
+                        mustChangePassword: !!userDoc.mustChangePassword,
+                    };
+
+                    logger.debug("Validated logged in user", {
+                        userId: hydratedUser?.userId,
+                        roles: hydratedUser?.roles,
+                    });
+
+                    req.currentUser = hydratedUser;
+                    return next();
+                } catch (dbErr) {
+                    logger.error(
+                        "Error loading user roles in auth middleware",
+                        {
+                            error: dbErr.message,
+                        },
+                    );
+
+                    return res.status(500).json({
+                        isSuccess: false,
+                        message: "Internal Server Error",
+                    });
+                }
             },
         );
     } catch (err) {
