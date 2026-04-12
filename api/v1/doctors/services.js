@@ -38,10 +38,22 @@ const deriveQueueMeta = (appointment) => {
         ? Number(appointment.queueCallCount)
         : 0;
 
+    // Reconcile stale state from older records.
+    if (appointment.status === "completed") {
+        queueStatus = "completed";
+    } else if (appointment.consultationStartedAt && !appointment.consultationEndedAt) {
+        queueStatus = "in_consultation";
+    } else if (
+        (queueStatus === "waiting" || !queueStatus) &&
+        (appointment.lastCalledAt || appointment.firstCallEmailSentAt)
+    ) {
+        queueStatus = "called";
+    }
+
     if (!queueStatus) {
         if (appointment.status === "completed") {
             queueStatus = "completed";
-        } else if (appointment.consultationStartedAt) {
+        } else if (appointment.consultationStartedAt && !appointment.consultationEndedAt) {
             queueStatus = "in_consultation";
         } else if (
             appointment.lastCalledAt ||
@@ -60,10 +72,24 @@ const deriveQueueMeta = (appointment) => {
         queueCallCount = 1;
     }
 
+    if (queueStatus === "called" && queueCallCount <= 0) {
+        queueCallCount = 1;
+    }
+
     return {
         queueStatus,
         queueCallCount,
     };
+};
+
+const appendQueueAudit = (appointment, eventData) => {
+    appointment.queueAuditTrail = Array.isArray(appointment.queueAuditTrail)
+        ? appointment.queueAuditTrail
+        : [];
+    appointment.queueAuditTrail.push({
+        at: new Date(),
+        ...eventData,
+    });
 };
 
 const assignTokenIfMissing = async (appointment) => {
@@ -371,9 +397,10 @@ const getTodayAppointments = async (userId) => {
     };
 };
 
-const updateQueueCallState = async (appointment, doctorName) => {
+const updateQueueCallState = async (appointment, doctorName, doctorUserId) => {
     const firstCall = !appointment.firstCallEmailSentAt;
     const now = new Date();
+    const previousQueueStatus = appointment.queueStatus || "waiting";
 
     appointment.queueStatus = "called";
     appointment.queueCallCount = (appointment.queueCallCount || 0) + 1;
@@ -392,6 +419,31 @@ const updateQueueCallState = async (appointment, doctorName) => {
             tokenNumber: appointment.tokenNumber,
         });
     }
+
+    appointment.queueNotificationHistory = Array.isArray(
+        appointment.queueNotificationHistory,
+    )
+        ? appointment.queueNotificationHistory
+        : [];
+    appointment.queueNotificationHistory.push({
+        sentAt: now,
+        channel: firstCall ? "email_and_in_app" : "in_app_only",
+        deliveryStatus: "delivered",
+        actorRole: "doctor",
+        actorId: doctorUserId,
+        message: appointment.queueNotificationMessage,
+    });
+
+    appendQueueAudit(appointment, {
+        event: firstCall ? "patient_notified" : "patient_reminded",
+        fromStatus: previousQueueStatus,
+        toStatus: "called",
+        actorRole: "doctor",
+        actorId: doctorUserId,
+        note: firstCall
+            ? "Doctor sent first notification (email + in-app)."
+            : "Doctor sent reminder notification (in-app).",
+    });
 
     await appointment.save();
 
@@ -428,7 +480,7 @@ const callTodayQueuePatient = async (userId, appointmentId) => {
     }
 
     await assignTokenIfMissing(appointment);
-    return updateQueueCallState(appointment, doctor?.name);
+    return updateQueueCallState(appointment, doctor?.name, userId);
 };
 
 const callNextQueuePatient = async (userId) => {
@@ -461,7 +513,7 @@ const callNextQueuePatient = async (userId) => {
         throw err;
     }
 
-    return updateQueueCallState(nextAppointment, doctor?.name);
+    return updateQueueCallState(nextAppointment, doctor?.name, userId);
 };
 
 const startConsultation = async (userId, appointmentId) => {
@@ -484,6 +536,7 @@ const startConsultation = async (userId, appointmentId) => {
     }
 
     await assignTokenIfMissing(appointment);
+    const previousQueueStatus = appointment.queueStatus || "called";
     appointment.queueStatus = "in_consultation";
     appointment.queueNotificationMessage = "You are currently in consultation.";
     if (!appointment.consultationStartedAt) {
@@ -491,6 +544,14 @@ const startConsultation = async (userId, appointmentId) => {
     }
     appointment.consultationEndedAt = null;
     appointment.consultationDurationSeconds = null;
+    appendQueueAudit(appointment, {
+        event: "consultation_started",
+        fromStatus: previousQueueStatus,
+        toStatus: "in_consultation",
+        actorRole: "doctor",
+        actorId: userId,
+        note: "Consultation started by doctor",
+    });
     await appointment.save();
 
     return {
@@ -587,6 +648,7 @@ const completeAppointment = async (
     }
 
     await appointment.markCompleted(prescription, doctorNotes);
+    const previousQueueStatus = appointment.queueStatus || "in_consultation";
     appointment.queueStatus = "completed";
     appointment.queueNotificationMessage = "Consultation completed.";
     if (appointment.consultationStartedAt && !appointment.consultationEndedAt) {
@@ -602,6 +664,14 @@ const completeAppointment = async (
             Math.floor((end - start) / 1000),
         );
     }
+    appendQueueAudit(appointment, {
+        event: "consultation_completed",
+        fromStatus: previousQueueStatus,
+        toStatus: "completed",
+        actorRole: "doctor",
+        actorId: userId,
+        note: "Consultation completed by doctor",
+    });
     await appointment.save();
 
     // Fetch patient and doctor info for notification

@@ -81,6 +81,75 @@ const appointmentSchema = new Schema(
             default: "",
             maxlength: 500,
         },
+        queueNotificationHistory: [
+            {
+                sentAt: {
+                    type: Date,
+                    default: Date.now,
+                },
+                channel: {
+                    type: String,
+                    enum: ["email_and_in_app", "in_app_only"],
+                    default: "in_app_only",
+                },
+                deliveryStatus: {
+                    type: String,
+                    enum: ["delivered", "unknown", "failed"],
+                    default: "delivered",
+                },
+                actorRole: {
+                    type: String,
+                    enum: ["admin", "doctor", "system"],
+                    default: "system",
+                },
+                actorId: {
+                    type: Schema.Types.ObjectId,
+                    ref: "user",
+                    default: null,
+                },
+                message: {
+                    type: String,
+                    default: "",
+                    maxlength: 500,
+                },
+            },
+        ],
+        queueAuditTrail: [
+            {
+                at: {
+                    type: Date,
+                    default: Date.now,
+                },
+                event: {
+                    type: String,
+                    default: "queue_update",
+                    maxlength: 100,
+                },
+                fromStatus: {
+                    type: String,
+                    default: null,
+                },
+                toStatus: {
+                    type: String,
+                    default: null,
+                },
+                actorRole: {
+                    type: String,
+                    enum: ["admin", "doctor", "system"],
+                    default: "system",
+                },
+                actorId: {
+                    type: Schema.Types.ObjectId,
+                    ref: "user",
+                    default: null,
+                },
+                note: {
+                    type: String,
+                    default: "",
+                    maxlength: 500,
+                },
+            },
+        ],
         consultationStartedAt: {
             type: Date,
             default: null,

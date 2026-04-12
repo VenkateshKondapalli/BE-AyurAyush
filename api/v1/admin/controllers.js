@@ -14,6 +14,9 @@ const {
     getDoctorAvailableSlotsForAdmin,
     getTodayQueue,
     callTodayQueuePatient,
+    getQueueInsights,
+    getAppointmentAuditTrail,
+    batchDecideAppointments,
 } = require("./services");
 
 const adminDashboardController = async (req, res, next) => {
@@ -259,6 +262,49 @@ const callPatientController = async (req, res, next) => {
     }
 };
 
+const getQueueInsightsController = async (req, res, next) => {
+    try {
+        const data = await getQueueInsights();
+        res.status(200).json({
+            isSuccess: true,
+            message: "Queue insights loaded successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const getAppointmentAuditTrailController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await getAppointmentAuditTrail(appointmentId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Appointment audit trail loaded successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const batchDecideAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await batchDecideAppointments(
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Batch decision processed",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     adminDashboardController,
     createDoctorAccountController,
@@ -275,4 +321,7 @@ module.exports = {
     getDoctorAvailableSlotsController,
     getTodayQueueController,
     callPatientController,
+    getQueueInsightsController,
+    getAppointmentAuditTrailController,
+    batchDecideAppointmentsController,
 };

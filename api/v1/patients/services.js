@@ -575,6 +575,13 @@ const getAppointmentDetails = async (userId, appointmentId) => {
             urgencyLevel: appointment.urgencyLevel,
             date: appointment.date,
             timeSlot: appointment.timeSlot,
+            consultationStartedAt: appointment.consultationStartedAt,
+            consultationEndedAt: appointment.consultationEndedAt,
+            consultationDurationSeconds: Number.isFinite(Number(appointment.consultationDurationSeconds)) 
+                ? Number(appointment.consultationDurationSeconds) 
+                : (appointment.consultationStartedAt && appointment.consultationEndedAt)
+                    ? Math.max(0, Math.floor((new Date(appointment.consultationEndedAt).getTime() - new Date(appointment.consultationStartedAt).getTime()) / 1000))
+                    : null,
             symptoms: appointment.symptoms,
             aiSummary: appointment.aiSummary,
             adminNotes: appointment.adminNotes,

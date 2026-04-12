@@ -57,6 +57,47 @@ const assignTokenIfMissing = async (appointment) => {
     return appointment;
 };
 
+const getQueueDeliveryMeta = (appointment) => {
+    const notifications = Array.isArray(appointment.queueNotificationHistory)
+        ? appointment.queueNotificationHistory
+        : [];
+    const lastNotification =
+        notifications.length > 0
+            ? notifications[notifications.length - 1]
+            : null;
+
+    if (!lastNotification) {
+        return {
+            deliveryStatus:
+                Number(appointment.queueCallCount || 0) > 0
+                    ? "delivered"
+                    : "not_sent",
+            lastNotification: null,
+        };
+    }
+
+    return {
+        deliveryStatus: lastNotification.deliveryStatus || "unknown",
+        lastNotification: {
+            channel: lastNotification.channel || "in_app_only",
+            sentAt: lastNotification.sentAt || null,
+            actorRole: lastNotification.actorRole || "system",
+            deliveryStatus: lastNotification.deliveryStatus || "unknown",
+            message: lastNotification.message || "",
+        },
+    };
+};
+
+const appendQueueAudit = (appointment, eventData) => {
+    appointment.queueAuditTrail = Array.isArray(appointment.queueAuditTrail)
+        ? appointment.queueAuditTrail
+        : [];
+    appointment.queueAuditTrail.push({
+        at: new Date(),
+        ...eventData,
+    });
+};
+
 const getDashboardStats = async () => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -561,44 +602,50 @@ const getTodayQueue = async () => {
         appointments.map(assignTokenIfMissing),
     );
 
-    const queue = normalizedAppointments.map((apt) => ({
-        appointmentId: apt._id,
-        status: apt.status,
-        tokenNumber: apt.tokenNumber,
-        queueStatus: apt.queueStatus || "waiting",
-        queueCallCount: apt.queueCallCount || 0,
-        lastCalledAt: apt.lastCalledAt,
-        queueNotificationMessage: apt.queueNotificationMessage || "",
-        consultationStartedAt: apt.consultationStartedAt,
-        consultationEndedAt: apt.consultationEndedAt,
-        consultationDurationSeconds: Number.isFinite(
-            Number(apt.consultationDurationSeconds),
-        )
-            ? Number(apt.consultationDurationSeconds)
-            : apt.consultationStartedAt
-              ? Math.max(
-                    0,
-                    Math.floor(
-                        ((apt.consultationEndedAt
-                            ? new Date(apt.consultationEndedAt).getTime()
-                            : Date.now()) -
-                            new Date(apt.consultationStartedAt).getTime()) /
-                            1000,
-                    ),
-                )
-              : null,
-        date: apt.date,
-        timeSlot: apt.timeSlot,
-        patient: {
-            id: apt.patientId?._id,
-            name: apt.patientId?.name || "Patient",
-            email: apt.patientId?.email,
-        },
-        doctor: {
-            id: apt.doctorId?._id,
-            name: apt.doctorId?.name || "Unassigned",
-        },
-    }));
+    const queue = normalizedAppointments.map((apt) => {
+        const deliveryMeta = getQueueDeliveryMeta(apt);
+        return {
+            appointmentId: apt._id,
+            status: apt.status,
+            tokenNumber: apt.tokenNumber,
+            queueStatus: apt.queueStatus || "waiting",
+            queueCallCount: apt.queueCallCount || 0,
+            lastCalledAt: apt.lastCalledAt,
+            queueNotificationMessage: apt.queueNotificationMessage || "",
+            consultationStartedAt: apt.consultationStartedAt,
+            consultationEndedAt: apt.consultationEndedAt,
+            consultationDurationSeconds: Number.isFinite(
+                Number(apt.consultationDurationSeconds),
+            )
+                ? Number(apt.consultationDurationSeconds)
+                : apt.consultationStartedAt
+                  ? Math.max(
+                        0,
+                        Math.floor(
+                            ((apt.consultationEndedAt
+                                ? new Date(apt.consultationEndedAt).getTime()
+                                : Date.now()) -
+                                new Date(apt.consultationStartedAt).getTime()) /
+                                1000,
+                        ),
+                    )
+                  : null,
+            deliveryStatus: deliveryMeta.deliveryStatus,
+            lastNotification: deliveryMeta.lastNotification,
+            date: apt.date,
+            timeSlot: apt.timeSlot,
+            queueType: apt.queueType || "normal",
+            patient: {
+                id: apt.patientId?._id,
+                name: apt.patientId?.name || "Patient",
+                email: apt.patientId?.email,
+            },
+            doctor: {
+                id: apt.doctorId?._id,
+                name: apt.doctorId?.name || "Unassigned",
+            },
+        };
+    });
 
     return {
         count: queue.length,
@@ -630,6 +677,7 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
 
     const now = new Date();
     const firstCall = !appointment.firstCallEmailSentAt;
+    const previousQueueStatus = appointment.queueStatus || "waiting";
 
     appointment.queueStatus = "called";
     appointment.queueCallCount = (appointment.queueCallCount || 0) + 1;
@@ -650,6 +698,31 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
         });
     }
 
+    appointment.queueNotificationHistory = Array.isArray(
+        appointment.queueNotificationHistory,
+    )
+        ? appointment.queueNotificationHistory
+        : [];
+    appointment.queueNotificationHistory.push({
+        sentAt: now,
+        channel: firstCall ? "email_and_in_app" : "in_app_only",
+        deliveryStatus: "delivered",
+        actorRole: "admin",
+        actorId: adminUserId,
+        message: appointment.queueNotificationMessage,
+    });
+
+    appendQueueAudit(appointment, {
+        event: firstCall ? "patient_notified" : "patient_reminded",
+        fromStatus: previousQueueStatus,
+        toStatus: "called",
+        actorRole: "admin",
+        actorId: adminUserId,
+        note: firstCall
+            ? "First notification sent (email + in-app)."
+            : "Reminder notification sent (in-app).",
+    });
+
     await appointment.save();
 
     return {
@@ -660,6 +733,372 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
         notificationMode: firstCall ? "email_and_in_app" : "in_app_only",
         patientName: appointment.patientId?.name || "Patient",
         tokenNumber: appointment.tokenNumber,
+    };
+};
+
+const getQueueInsights = async () => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    const slaThresholdSeconds = 20 * 60;
+
+    const appointments = await AppointmentModel.find({
+        date: { $gte: todayStart, $lte: todayEnd },
+        status: { $in: ["confirmed", "completed"] },
+    })
+        .populate("patientId", "name")
+        .populate("doctorId", "name")
+        .sort({ createdAt: 1 });
+
+    const now = Date.now();
+
+    const createAggregate = () => ({
+        longestWait: {
+            appointmentId: null,
+            patientName: "",
+            doctorName: "",
+            waitingForSeconds: 0,
+            queueStatus: "waiting",
+            tokenNumber: "",
+        },
+        activeWaitTotal: 0,
+        activeWaitCount: 0,
+        slaBreaches: 0,
+        bottleneckMap: new Map(),
+        notificationsSent: 0,
+        notificationsDelivered: 0,
+        notificationsViaEmail: 0,
+        notificationsInAppOnly: 0,
+    });
+
+    const aggregates = {
+        global: createAggregate(),
+        ayurveda: createAggregate(),
+        panchakarma: createAggregate(),
+        normal: createAggregate(),
+    };
+
+    const getSlotStartMs = (appointment) => {
+        const slot = String(appointment.timeSlot || "");
+        const startPart = slot.split("-")[0]?.trim() || "";
+        const match = startPart.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+        if (!match) {
+            return null;
+        }
+
+        let hours = Number(match[1]);
+        const minutes = Number(match[2]);
+        const meridiem = match[3] ? match[3].toUpperCase() : null;
+
+        if (meridiem) {
+            if (meridiem === "PM" && hours < 12) {
+                hours += 12;
+            }
+            if (meridiem === "AM" && hours === 12) {
+                hours = 0;
+            }
+        }
+
+        if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+            return null;
+        }
+
+        const slotStart = new Date(appointment.date || Date.now());
+        slotStart.setHours(hours, minutes, 0, 0);
+        return slotStart.getTime();
+    };
+
+    appointments.forEach((apt) => {
+        let waitSec = 0;
+        const nowMs = now;
+        const slotStartMs = getSlotStartMs(apt);
+        const consultationStartMs = apt.consultationStartedAt
+            ? new Date(apt.consultationStartedAt).getTime()
+            : null;
+        const waitUntilMs = consultationStartMs || nowMs;
+
+        if (slotStartMs) {
+            const diffMs = waitUntilMs - slotStartMs;
+            if (diffMs > 0) {
+                waitSec = Math.floor(diffMs / 1000);
+            }
+        }
+
+        const isActiveQueue =
+            apt.status === "confirmed" &&
+            ["waiting", "called", "in_consultation"].includes(
+                apt.queueStatus || "waiting",
+            );
+
+        const updateAgg = (agg) => {
+            if (waitSec > 0) {
+                agg.activeWaitTotal += waitSec;
+                agg.activeWaitCount += 1;
+                if (waitSec > slaThresholdSeconds) {
+                    agg.slaBreaches += 1;
+                }
+            }
+
+            if (isActiveQueue && waitSec > agg.longestWait.waitingForSeconds) {
+                agg.longestWait = {
+                    appointmentId: apt._id,
+                    patientName: apt.patientId?.name || "Patient",
+                    doctorName: apt.doctorId?.name || "Unassigned",
+                    waitingForSeconds: waitSec,
+                    queueStatus: apt.queueStatus || "waiting",
+                    tokenNumber: apt.tokenNumber || "",
+                };
+            }
+
+            const slotKey = `${apt.doctorId?.name || "Unassigned"}__${apt.timeSlot || "Unknown"}`;
+            const slotData = agg.bottleneckMap.get(slotKey) || {
+                doctorName: apt.doctorId?.name || "Unassigned",
+                timeSlot: apt.timeSlot || "Unknown",
+                totalAppointments: 0,
+                waitingOrCalled: 0,
+                totalWaitSeconds: 0,
+            };
+            slotData.totalAppointments += 1;
+            if (waitSec > 0) {
+                slotData.waitingOrCalled += 1;
+                slotData.totalWaitSeconds += waitSec;
+            }
+            agg.bottleneckMap.set(slotKey, slotData);
+
+            const notificationHistory = Array.isArray(apt.queueNotificationHistory)
+                ? apt.queueNotificationHistory
+                : [];
+            notificationHistory.forEach((item) => {
+                agg.notificationsSent += 1;
+                if (item.deliveryStatus === "delivered") {
+                    agg.notificationsDelivered += 1;
+                }
+                if (item.channel === "email_and_in_app") {
+                    agg.notificationsViaEmail += 1;
+                }
+                if (item.channel === "in_app_only") {
+                    agg.notificationsInAppOnly += 1;
+                }
+            });
+        };
+
+        const qType = apt.queueType || "normal";
+        updateAgg(aggregates.global);
+        if (aggregates[qType]) {
+            updateAgg(aggregates[qType]);
+        }
+    });
+
+    const formatOutput = (agg) => {
+        const bottlenecks = [...agg.bottleneckMap.values()]
+            .map((item) => ({
+                ...item,
+                avgWaitSeconds:
+                    item.waitingOrCalled > 0
+                        ? Math.floor(item.totalWaitSeconds / item.waitingOrCalled)
+                        : 0,
+            }))
+            .sort((a, b) => {
+                if (b.waitingOrCalled !== a.waitingOrCalled) {
+                    return b.waitingOrCalled - a.waitingOrCalled;
+                }
+                return b.avgWaitSeconds - a.avgWaitSeconds;
+            })
+            .slice(0, 6);
+
+        return {
+            sla: {
+                thresholdMinutes: 20,
+                averageWaitSeconds:
+                    agg.activeWaitCount > 0
+                        ? Math.floor(agg.activeWaitTotal / agg.activeWaitCount)
+                        : 0,
+                breachCount: agg.slaBreaches,
+                activeQueueCount: agg.activeWaitCount,
+            },
+            longestWaiting: agg.longestWait,
+            bottlenecks,
+            notificationDelivery: {
+                sent: agg.notificationsSent,
+                delivered: agg.notificationsDelivered,
+                viaEmailAndInApp: agg.notificationsViaEmail,
+                inAppOnly: agg.notificationsInAppOnly,
+            },
+        };
+    };
+
+    return {
+        global: formatOutput(aggregates.global),
+        ayurveda: formatOutput(aggregates.ayurveda),
+        panchakarma: formatOutput(aggregates.panchakarma),
+        normal: formatOutput(aggregates.normal),
+    };
+};
+
+const getAppointmentAuditTrail = async (appointmentId) => {
+    const appointment = await AppointmentModel.findById(appointmentId)
+        .populate("patientId", "name")
+        .populate("doctorId", "name");
+
+    if (!appointment) {
+        const err = new Error("Appointment not found");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const persistedTrail = Array.isArray(appointment.queueAuditTrail)
+        ? appointment.queueAuditTrail
+        : [];
+    const synthesizedTrail = [];
+
+    if (appointment.createdAt) {
+        synthesizedTrail.push({
+            at: appointment.createdAt,
+            event: "appointment_created",
+            fromStatus: null,
+            toStatus: appointment.status,
+            actorRole: "system",
+            note: "Appointment created",
+        });
+    }
+    if (appointment.adminApprovedAt) {
+        synthesizedTrail.push({
+            at: appointment.adminApprovedAt,
+            event: "appointment_approved",
+            fromStatus: "pending_admin_approval",
+            toStatus: "confirmed",
+            actorRole: "admin",
+            note: appointment.adminNotes || "Approved by admin",
+        });
+    }
+    if (appointment.firstCallEmailSentAt) {
+        synthesizedTrail.push({
+            at: appointment.firstCallEmailSentAt,
+            event: "first_notification_sent",
+            fromStatus: "waiting",
+            toStatus: "called",
+            actorRole: "system",
+            note: "Initial notification sent",
+        });
+    }
+    if (appointment.consultationStartedAt) {
+        synthesizedTrail.push({
+            at: appointment.consultationStartedAt,
+            event: "consultation_started",
+            fromStatus: "called",
+            toStatus: "in_consultation",
+            actorRole: "doctor",
+            note: "Consultation started",
+        });
+    }
+    if (appointment.consultationEndedAt) {
+        synthesizedTrail.push({
+            at: appointment.consultationEndedAt,
+            event: "consultation_ended",
+            fromStatus: "in_consultation",
+            toStatus: appointment.queueStatus || "completed",
+            actorRole: "doctor",
+            note: "Consultation ended",
+        });
+    }
+
+    const timeline = [...persistedTrail, ...synthesizedTrail]
+        .filter((item) => item?.at)
+        .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    const notificationHistory = Array.isArray(
+        appointment.queueNotificationHistory,
+    )
+        ? appointment.queueNotificationHistory
+        : [];
+
+    return {
+        appointment: {
+            appointmentId: appointment._id,
+            patientName: appointment.patientId?.name || "Patient",
+            doctorName: appointment.doctorId?.name || "Doctor",
+            date: appointment.date,
+            timeSlot: appointment.timeSlot,
+            tokenNumber: appointment.tokenNumber,
+            queueStatus: appointment.queueStatus || "waiting",
+            queueCallCount: Number(appointment.queueCallCount || 0),
+        },
+        timeline,
+        notifications: notificationHistory,
+    };
+};
+
+const batchDecideAppointments = async (adminUserId, payload = {}) => {
+    const {
+        appointmentIds = [],
+        action,
+        reason,
+        reasonPreset,
+        edits,
+        adminNotes,
+    } = payload;
+
+    if (!Array.isArray(appointmentIds) || appointmentIds.length === 0) {
+        const err = new Error("appointmentIds is required");
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (!["approve", "reject"].includes(action)) {
+        const err = new Error("action must be approve or reject");
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const resolvedReason = [reasonPreset, reason].filter(Boolean).join(" - ");
+    const results = [];
+
+    for (const appointmentId of appointmentIds) {
+        try {
+            if (action === "approve") {
+                const approved = await approveAppointment(
+                    appointmentId,
+                    adminUserId,
+                    edits || {},
+                    adminNotes,
+                );
+                results.push({
+                    appointmentId,
+                    success: true,
+                    action,
+                    data: approved,
+                });
+            } else {
+                const rejected = await rejectAppointment(
+                    appointmentId,
+                    adminUserId,
+                    resolvedReason || "Rejected by admin batch action",
+                );
+                results.push({
+                    appointmentId,
+                    success: true,
+                    action,
+                    data: rejected,
+                });
+            }
+        } catch (error) {
+            results.push({
+                appointmentId,
+                success: false,
+                action,
+                message: error.message || "Failed to process appointment",
+            });
+        }
+    }
+
+    const successCount = results.filter((item) => item.success).length;
+    return {
+        action,
+        total: appointmentIds.length,
+        successCount,
+        failureCount: appointmentIds.length - successCount,
+        results,
     };
 };
 
@@ -723,6 +1162,15 @@ const approveAppointment = async (
         appointment.adminNotes = adminNotes;
     }
 
+    appendQueueAudit(appointment, {
+        event: "appointment_approved",
+        fromStatus: appointment.status,
+        toStatus: "confirmed",
+        actorRole: "admin",
+        actorId: adminUserId,
+        note: adminNotes || "Approved by admin",
+    });
+
     await appointment.approveByAdmin(adminUserId, edits);
 
     const updatedAppointment = await AppointmentModel.findById(appointmentId)
@@ -765,6 +1213,15 @@ const rejectAppointment = async (appointmentId, adminUserId, reason) => {
         err.statusCode = 400;
         throw err;
     }
+
+    appendQueueAudit(appointment, {
+        event: "appointment_rejected",
+        fromStatus: appointment.status,
+        toStatus: "rejected",
+        actorRole: "admin",
+        actorId: adminUserId,
+        note: reason || "Rejected by admin",
+    });
 
     await appointment.rejectByAdmin(adminUserId, reason);
 
@@ -1082,4 +1539,7 @@ module.exports = {
     getDoctorAvailableSlotsForAdmin,
     getTodayQueue,
     callTodayQueuePatient,
+    getQueueInsights,
+    getAppointmentAuditTrail,
+    batchDecideAppointments,
 };

@@ -19,6 +19,9 @@ const {
     offlineBookAppointmentController,
     getTodayQueueController,
     callPatientController,
+    getQueueInsightsController,
+    getAppointmentAuditTrailController,
+    batchDecideAppointmentsController,
 } = require("./controllers");
 const {
     rejectAppointmentValidator,
@@ -91,6 +94,27 @@ adminsRouter.post(
     validateLoggedInUserMiddleware,
     validateIsAdminMiddleware,
     callPatientController,
+);
+
+adminsRouter.get(
+    "/appointments/queue-insights",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    getQueueInsightsController,
+);
+
+adminsRouter.get(
+    "/appointments/:appointmentId/audit-trail",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    getAppointmentAuditTrailController,
+);
+
+adminsRouter.post(
+    "/appointments/batch-decision",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    batchDecideAppointmentsController,
 );
 
 adminsRouter.get(
