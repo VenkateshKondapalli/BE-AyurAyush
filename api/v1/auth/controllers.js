@@ -36,7 +36,7 @@ const userLoginController = async (req, res, next) => {
     try {
         const { email, password } = req.body;
 
-        const { token, roles, mustChangePassword } = await loginUser({
+        const { token, name, roles, mustChangePassword } = await loginUser({
             email,
             password,
         });
@@ -51,7 +51,7 @@ const userLoginController = async (req, res, next) => {
         res.status(200).json({
             isSuccess: true,
             message: "User logged in!",
-            data: { roles, mustChangePassword },
+            data: { name, roles, mustChangePassword },
         });
     } catch (err) {
         next(err);
@@ -80,7 +80,7 @@ const getCurrentUserController = async (req, res, next) => {
     try {
         const { userId } = req.currentUser;
         const user = await UserModel.findById(userId).select(
-            "roles mustChangePassword",
+            "name roles mustChangePassword",
         );
 
         if (!user) {
@@ -94,6 +94,7 @@ const getCurrentUserController = async (req, res, next) => {
             isSuccess: true,
             data: {
                 userId,
+                name: user.name,
                 roles: user.roles,
                 mustChangePassword: !!user.mustChangePassword,
             },

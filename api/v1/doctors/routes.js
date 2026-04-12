@@ -9,6 +9,9 @@ const {
     getTodayAppointmentsController,
     getAppointmentDetailController,
     completeAppointmentController,
+    callTodayQueuePatientController,
+    callNextQueuePatientController,
+    startConsultationController,
     getDoctorProfileController,
     updateDoctorProfileController,
 } = require("./controllers");
@@ -41,6 +44,28 @@ doctorsRouter.get(
     validateLoggedInUserMiddleware,
     validateDoctorRole,
     getTodayAppointmentsController,
+);
+
+// Queue controls
+doctorsRouter.post(
+    "/appointments/queue/next-call",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    callNextQueuePatientController,
+);
+
+doctorsRouter.post(
+    "/appointments/:appointmentId/call",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    callTodayQueuePatientController,
+);
+
+doctorsRouter.post(
+    "/appointments/:appointmentId/start-consultation",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    startConsultationController,
 );
 
 // Get specific appointment details

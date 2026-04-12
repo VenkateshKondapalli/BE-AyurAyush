@@ -68,6 +68,19 @@ const chatHistorySchema = new Schema(
                 type: Date,
             },
         },
+        summaryStatus: {
+            type: String,
+            enum: ["active", "deleted"],
+            default: "active",
+        },
+        summaryDeletedAt: {
+            type: Date,
+            default: null,
+        },
+        messagesPrunedAt: {
+            type: Date,
+            default: null,
+        },
         status: {
             type: String,
             enum: ["active", "completed", "emergency"],
@@ -115,6 +128,8 @@ chatHistorySchema.methods.completeSummary = function (summaryData) {
         ...summaryData,
         generatedAt: new Date(),
     };
+    this.summaryStatus = "active";
+    this.summaryDeletedAt = null;
     this.status = "completed";
     return this.save();
 };

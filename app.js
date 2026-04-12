@@ -1,12 +1,7 @@
 const dotenv = require("dotenv");
 dotenv.config();
 
-const required = [
-    "MONGO_DB_URL",
-    "JWT_SECRET",
-    "GEMINI_AI_API_KEY",
-    "RESEND_MAILER_API_KEY",
-];
+const required = ["MONGO_DB_URL", "JWT_SECRET", "RESEND_MAILER_API_KEY"];
 
 required.forEach((key) => {
     if (!process.env[key]) {
@@ -15,8 +10,21 @@ required.forEach((key) => {
     }
 });
 
+const hasGemini = Boolean(
+    process.env.GEMINI_AI_API_KEY || process.env.GEMINI_AI_API_KEYS,
+);
+const hasGroq = Boolean(process.env.GROQ_API_KEY || process.env.GROQ_API_KEYS);
+
+if (!hasGemini && !hasGroq) {
+    console.error(
+        "Missing AI provider keys: set GEMINI_AI_API_KEY(S) and/or GROQ_API_KEY(S)",
+    );
+    process.exit(1);
+}
+
 const logger = require("./utils/logger");
 const { csrfOriginCheckMiddleware } = require("./utils/csrfProtection");
+const { startChatRetentionJob } = require("./utils/chatRetentionJob");
 
 const { apiRouter } = require("./api/v1/routes");
 const { errorHandler } = require("./api/v1/errorHandler");
@@ -36,13 +44,29 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
+const configuredFrontendOrigins = [
+    process.env.FRONTEND_URL_LOCAL,
+    process.env.FRONTEND_URL_VERCEL,
+    process.env.FRONTEND_URL_CUSTOM_DOMAIN,
+].filter(Boolean);
+
+const localhostDevOriginPattern = /^http:\/\/localhost:\d+$/;
+
 app.use(
     cors({
-        origin: [
-            process.env.FRONTEND_URL_LOCAL,
-            process.env.FRONTEND_URL_VERCEL,
-            process.env.FRONTEND_URL_CUSTOM_DOMAIN,
-        ],
+        origin: (origin, callback) => {
+            // Allow same-origin/non-browser tools where Origin may be undefined.
+            if (!origin) return callback(null, true);
+
+            const isConfigured = configuredFrontendOrigins.includes(origin);
+            const isLocalDev = localhostDevOriginPattern.test(origin);
+
+            if (isConfigured || isLocalDev) {
+                return callback(null, true);
+            }
+
+            return callback(new Error(`CORS blocked for origin: ${origin}`));
+        },
         credentials: true,
         methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     }),
@@ -72,7 +96,7 @@ const authLimiter = rateLimit({
     },
 });
 
-app.use(globalLimiter);
+// app.use(globalLimiter);
 
 app.use(morgan("dev"));
 
@@ -85,8 +109,8 @@ app.get("/", (req, res) => {
 });
 
 // Apply stricter rate limit to auth & OTP endpoints
-app.use("/api/v1/auth", authLimiter);
-app.use("/api/v1/otps", authLimiter);
+// app.use("/api/v1/auth", authLimiter);
+// app.use("/api/v1/otps", authLimiter);
 
 app.use("/api/v1", csrfOriginCheckMiddleware, apiRouter);
 
@@ -95,4 +119,5 @@ app.use(errorHandler);
 
 app.listen(process.env.PORT, () => {
     logger.info("Server started", { port: process.env.PORT });
+    startChatRetentionJob();
 });

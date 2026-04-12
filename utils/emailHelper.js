@@ -1,10 +1,29 @@
 const { Resend } = require("resend");
 const logger = require("./logger");
 
-const resend = new Resend(process.env.RESEND_MAILER_API_KEY);
+const isEmailEnabled =
+    (process.env.EMAIL_ENABLED || "true").toLowerCase() === "true";
+let resendClient;
+
+const getResendClient = () => {
+    if (!resendClient) {
+        resendClient = new Resend(process.env.RESEND_MAILER_API_KEY);
+    }
+
+    return resendClient;
+};
 
 const sendEmail = async (toEmail, subject, htmlText) => {
+    if (!isEmailEnabled) {
+        logger.info("Email sending skipped because EMAIL_ENABLED is false", {
+            subject,
+            to: toEmail,
+        });
+        return;
+    }
+
     try {
+        const resend = getResendClient();
         const { data, error } = await resend.emails.send({
             from: process.env.SENDER_EMAIL,
             to: toEmail,

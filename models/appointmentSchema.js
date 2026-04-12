@@ -59,6 +59,40 @@ const appointmentSchema = new Schema(
             type: Number,
             default: null,
         },
+        queueStatus: {
+            type: String,
+            enum: ["waiting", "called", "in_consultation", "completed"],
+            default: "waiting",
+        },
+        queueCallCount: {
+            type: Number,
+            default: 0,
+        },
+        firstCallEmailSentAt: {
+            type: Date,
+            default: null,
+        },
+        lastCalledAt: {
+            type: Date,
+            default: null,
+        },
+        queueNotificationMessage: {
+            type: String,
+            default: "",
+            maxlength: 500,
+        },
+        consultationStartedAt: {
+            type: Date,
+            default: null,
+        },
+        consultationEndedAt: {
+            type: Date,
+            default: null,
+        },
+        consultationDurationSeconds: {
+            type: Number,
+            default: null,
+        },
         treatmentCode: {
             type: String,
             default: null,

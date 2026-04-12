@@ -12,15 +12,20 @@ const {
     offlineBookAppointment,
     getVerifiedDoctorsForAdmin,
     getDoctorAvailableSlotsForAdmin,
+    getTodayQueue,
+    callTodayQueuePatient,
 } = require("./services");
 
 const adminDashboardController = async (req, res, next) => {
     try {
-        const stats = await getDashboardStats();
+        const dashboard = await getDashboardStats();
         res.status(200).json({
             isSuccess: true,
             message: "Admin dashboard loaded successfully",
-            data: { stats },
+            data: {
+                dashboard,
+                stats: dashboard.stats,
+            },
         });
     } catch (err) {
         next(err);
@@ -222,6 +227,38 @@ const offlineBookAppointmentController = async (req, res, next) => {
     }
 };
 
+const getTodayQueueController = async (req, res, next) => {
+    try {
+        const data = await getTodayQueue();
+        res.status(200).json({
+            isSuccess: true,
+            message: "Today's queue loaded successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const callPatientController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await callTodayQueuePatient(
+            appointmentId,
+            req.currentAdmin.userId,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: data.firstCallEmailSent
+                ? "Patient notified by email and in-app"
+                : "Patient notified in-app",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     adminDashboardController,
     createDoctorAccountController,
@@ -236,4 +273,6 @@ module.exports = {
     offlineBookAppointmentController,
     getVerifiedDoctorsController,
     getDoctorAvailableSlotsController,
+    getTodayQueueController,
+    callPatientController,
 };

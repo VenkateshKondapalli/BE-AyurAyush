@@ -4,6 +4,9 @@ const {
     getTodayAppointments,
     getAppointmentDetail,
     completeAppointment,
+    callTodayQueuePatient,
+    callNextQueuePatient,
+    startConsultation,
     getDoctorProfile,
     updateDoctorProfile,
 } = require("./services");
@@ -108,6 +111,62 @@ const completeAppointmentController = async (req, res, next) => {
     }
 };
 
+const callTodayQueuePatientController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await callTodayQueuePatient(
+            req.currentDoctor.userId,
+            appointmentId,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Patient called successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in callTodayQueuePatientController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const callNextQueuePatientController = async (req, res, next) => {
+    try {
+        const data = await callNextQueuePatient(req.currentDoctor.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Next patient called successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in callNextQueuePatientController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const startConsultationController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await startConsultation(
+            req.currentDoctor.userId,
+            appointmentId,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Consultation started",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in startConsultationController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
 const getDoctorProfileController = async (req, res, next) => {
     try {
         const data = await getDoctorProfile(req.currentDoctor.userId);
@@ -149,6 +208,9 @@ module.exports = {
     getTodayAppointmentsController,
     getAppointmentDetailController,
     completeAppointmentController,
+    callTodayQueuePatientController,
+    callNextQueuePatientController,
+    startConsultationController,
     getDoctorProfileController,
     updateDoctorProfileController,
 };
