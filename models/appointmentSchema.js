@@ -35,13 +35,14 @@ const appointmentSchema = new Schema(
         status: {
             type: String,
             enum: [
+                "pending_payment",
                 "pending_admin_approval",
                 "confirmed",
                 "completed",
                 "cancelled",
                 "rejected",
             ],
-            default: "pending_admin_approval",
+            default: "pending_payment",
         },
         urgencyLevel: {
             type: String,
@@ -306,17 +307,18 @@ appointmentSchema.statics.isSlotAvailable = async function (
     timeSlot,
 ) {
     const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
-    const existingAppointment = await this.findOne({
+    const existingAppointmentsCount = await this.countDocuments({
         doctorId,
         date: {
             $gte: dayStart,
             $lte: dayEnd,
         },
         timeSlot,
-        status: { $nin: ["cancelled", "rejected"] },
+        status: { $nin: ["cancelled", "rejected", "pending_payment"] },
     });
 
-    return !existingAppointment;
+    const SLOT_CAPACITY = 2;
+    return existingAppointmentsCount < SLOT_CAPACITY;
 };
 
 //method admin approves appointment

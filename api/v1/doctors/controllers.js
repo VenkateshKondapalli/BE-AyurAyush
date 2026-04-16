@@ -2,6 +2,7 @@ const {
     getDoctorDashboard,
     getDoctorAppointments,
     getTodayAppointments,
+    getUpcomingAppointments,
     getAppointmentDetail,
     completeAppointment,
     callTodayQueuePatient,
@@ -13,6 +14,11 @@ const {
     deactivateEmergencyDelay,
     getCustomReferences,
     addCustomReference,
+    getOwnAvailability,
+    updateOwnAvailability,
+    setOwnAvailabilityForDate,
+    addOwnAvailabilitySlotForDate,
+    removeOwnAvailabilitySlotForDate,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
@@ -64,6 +70,22 @@ const getTodayAppointmentsController = async (req, res, next) => {
         });
     } catch (err) {
         logger.error("Error in getTodayAppointmentsController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const getUpcomingAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await getUpcomingAppointments(req.currentDoctor.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Upcoming appointments retrieved successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in getUpcomingAppointmentsController", {
             error: err.message,
         });
         next(err);
@@ -209,7 +231,10 @@ const updateDoctorProfileController = async (req, res, next) => {
 const activateEmergencyDelayController = async (req, res, next) => {
     try {
         const { reason } = req.body;
-        const data = await activateEmergencyDelay(req.currentDoctor.userId, reason);
+        const data = await activateEmergencyDelay(
+            req.currentDoctor.userId,
+            reason,
+        );
         res.status(200).json({
             isSuccess: true,
             message: "Emergency delay activated",
@@ -239,6 +264,101 @@ const deactivateEmergencyDelayController = async (req, res, next) => {
     }
 };
 
+const getOwnAvailabilityController = async (req, res, next) => {
+    try {
+        const data = await getOwnAvailability(
+            req.currentDoctor.userId,
+            req.query.date,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Availability fetched successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in getOwnAvailabilityController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const setOwnAvailabilityForDateController = async (req, res, next) => {
+    try {
+        const data = await setOwnAvailabilityForDate(
+            req.currentDoctor.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Date availability updated successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in setOwnAvailabilityForDateController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const addOwnAvailabilitySlotForDateController = async (req, res, next) => {
+    try {
+        const data = await addOwnAvailabilitySlotForDate(
+            req.currentDoctor.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Slot added successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in addOwnAvailabilitySlotForDateController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const removeOwnAvailabilitySlotForDateController = async (req, res, next) => {
+    try {
+        const data = await removeOwnAvailabilitySlotForDate(
+            req.currentDoctor.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Slot removed successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in removeOwnAvailabilitySlotForDateController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const updateOwnAvailabilityController = async (req, res, next) => {
+    try {
+        const data = await updateOwnAvailability(
+            req.currentDoctor.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Availability updated successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in updateOwnAvailabilityController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
 const getCustomReferencesController = async (req, res, next) => {
     try {
         const data = await getCustomReferences(req.currentDoctor.userId);
@@ -258,7 +378,11 @@ const getCustomReferencesController = async (req, res, next) => {
 const addCustomReferenceController = async (req, res, next) => {
     try {
         const { activeTab, itemPayload } = req.body;
-        const data = await addCustomReference(req.currentDoctor.userId, activeTab, itemPayload);
+        const data = await addCustomReference(
+            req.currentDoctor.userId,
+            activeTab,
+            itemPayload,
+        );
         res.status(200).json({
             isSuccess: true,
             message: "Custom reference added successfully",
@@ -276,6 +400,7 @@ module.exports = {
     doctorDashboardController,
     getDoctorAppointmentsController,
     getTodayAppointmentsController,
+    getUpcomingAppointmentsController,
     getAppointmentDetailController,
     completeAppointmentController,
     callTodayQueuePatientController,
@@ -287,4 +412,9 @@ module.exports = {
     deactivateEmergencyDelayController,
     getCustomReferencesController,
     addCustomReferenceController,
+    getOwnAvailabilityController,
+    updateOwnAvailabilityController,
+    setOwnAvailabilityForDateController,
+    addOwnAvailabilitySlotForDateController,
+    removeOwnAvailabilitySlotForDateController,
 };

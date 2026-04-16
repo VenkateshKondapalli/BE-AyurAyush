@@ -1,6 +1,9 @@
 const { AppointmentModel } = require("../../../models/appointmentSchema");
 const { ChatHistoryModel } = require("../../../models/chatHistorySchema");
 const { DoctorModel } = require("../../../models/doctorSchema");
+const {
+    DoctorAvailabiltyModel,
+} = require("../../../models/doctorAvailabilitySchema");
 const { PatientModel } = require("../../../models/patientSchema");
 const { QueueTokenModel } = require("../../../models/queueTokenSchema");
 const { UserModel } = require("../../../models/userSchema");
@@ -171,6 +174,17 @@ const assignTokenIfMissing = async (appointment) => {
     return appointment;
 };
 
+const SLOT_CAPACITY = 2;
+
+const buildSlotCountMap = (appointments) => {
+    const map = {};
+    appointments.forEach((apt) => {
+        const key = `${(apt.doctorId?._id || apt.doctorId).toString()}__${apt.timeSlot}`;
+        map[key] = (map[key] || 0) + 1;
+    });
+    return map;
+};
+
 const getDoctorDashboard = async (userId) => {
     let doctor = await DoctorModel.findOne({ userId });
 
@@ -264,9 +278,12 @@ const getDoctorDashboard = async (userId) => {
         },
     );
 
+    const slotCountMap = buildSlotCountMap(sortedTodayAppointments);
+
     const todayAppointments = sortedTodayAppointments.map((apt) => ({
         ...(() => {
             const patient = getPatientDisplayData(apt);
+            const slotKey = `${userId.toString()}__${apt.timeSlot}`;
             return {
                 appointmentId: apt._id,
                 patient: {
@@ -286,6 +303,8 @@ const getDoctorDashboard = async (userId) => {
                 consultationDurationSeconds:
                     getConsultationDurationSeconds(apt),
                 isEmergencyTriage: patient.isEmergencyTriage,
+                slotBookingCount: slotCountMap[slotKey] || 1,
+                slotCapacity: SLOT_CAPACITY,
             };
         })(),
     }));
@@ -448,12 +467,16 @@ const getTodayAppointments = async (userId) => {
         patientProfiles.map((p) => [p.userId.toString(), p]),
     );
 
+    const slotCountMap = buildSlotCountMap(normalizedAppointments);
+
     const appointmentsWithDetails = normalizedAppointments.map((apt) => {
         const patientData = getPatientDisplayData(apt);
         const patientProfile = patientData.id
             ? profileMap.get(String(patientData.id))
             : null;
         const derivedQueue = deriveQueueMeta(apt);
+        const doctorIdStr = (apt.doctorId?._id || apt.doctorId).toString();
+        const slotKey = `${doctorIdStr}__${apt.timeSlot}`;
 
         return {
             appointmentId: apt._id,
@@ -487,6 +510,8 @@ const getTodayAppointments = async (userId) => {
             symptoms: apt.symptoms,
             aiSummary: apt.aiSummary,
             isEmergency: apt.urgencyLevel === "emergency",
+            slotBookingCount: slotCountMap[slotKey] || 1,
+            slotCapacity: SLOT_CAPACITY,
         };
     });
 
@@ -1016,10 +1041,272 @@ const addCustomReference = async (userId, activeTab, itemPayload) => {
     return currentRefs;
 };
 
+const getUpcomingAppointments = async (userId) => {
+    const { end: todayEnd } = getISTDayBounds();
+
+    const appointments = await AppointmentModel.find({
+        doctorId: userId,
+        status: { $nin: ["rejected", "cancelled"] },
+        date: { $gt: todayEnd },
+    })
+        .populate("patientId", "name email phone profilePhoto")
+        .sort({ date: 1, timeSlot: 1 })
+        .limit(20);
+
+    return appointments.map((apt) => ({
+        appointmentId: apt._id,
+        patient: {
+            id: apt.patientId?._id,
+            name: apt.patientId?.name || "Patient",
+            email: apt.patientId?.email,
+            phone: apt.patientId?.phone,
+        },
+        date: apt.date,
+        timeSlot: apt.timeSlot,
+        status: apt.status,
+        urgencyLevel: apt.urgencyLevel,
+    }));
+};
+
+const normalizeDateInput = (dateLike) => {
+    const date = new Date(dateLike);
+    if (Number.isNaN(date.getTime())) {
+        const err = new Error("Invalid date");
+        err.statusCode = 400;
+        throw err;
+    }
+    date.setHours(0, 0, 0, 0);
+    return date;
+};
+
+const normalizeSlotString = (slot) => {
+    const value = String(slot || "").trim();
+    if (!/^\d{2}:\d{2}\s*-\s*\d{2}:\d{2}$/.test(value)) {
+        const err = new Error(
+            "Invalid slot format. Expected HH:mm - HH:mm, e.g. 09:00 - 10:00",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+    return value;
+};
+
+const sortSlotStrings = (slots = []) =>
+    [...slots].sort((a, b) => String(a).localeCompare(String(b)));
+
+const getOrCreateAvailability = async (userId) => {
+    let availability = await DoctorAvailabiltyModel.findOne({ doctorId: userId });
+    if (!availability) {
+        availability = await DoctorAvailabiltyModel.create({
+            doctorId: userId,
+            availableDays: [],
+            timeSlots: {},
+            unavailableDates: [],
+            dateSpecificSlots: [],
+            lastUpdatedBy: userId,
+        });
+    }
+    return availability;
+};
+
+const ensureFutureDate = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (date < today) {
+        const err = new Error("You can only manage upcoming dates");
+        err.statusCode = 400;
+        throw err;
+    }
+};
+
+const ensureSlotRemovalAllowed = async ({
+    userId,
+    date,
+    slot,
+}) => {
+    const now = Date.now();
+    const diffMs = date.getTime() - now;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    if (diffMs < sevenDaysMs) {
+        const err = new Error(
+            "Slot can only be removed if appointment date is at least 7 days away",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
+    const bookedCount = await AppointmentModel.countDocuments({
+        doctorId: userId,
+        date: { $gte: dayStart, $lte: dayEnd },
+        timeSlot: slot,
+        status: { $nin: ["cancelled", "rejected"] },
+    });
+
+    if (bookedCount > 0) {
+        const err = new Error(
+            "Cannot remove this slot because at least one patient is already booked",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+};
+
+const getOwnAvailability = async (userId, date) => {
+    const availability = await DoctorAvailabiltyModel.findOne({ doctorId: userId });
+    if (!availability) {
+        return {
+            availableDays: [],
+            timeSlots: {},
+            unavailableDates: [],
+            dateSpecificSlots: [],
+            dateView: date
+                ? {
+                      date,
+                      slots: [],
+                      source: "none",
+                  }
+                : null,
+        };
+    }
+
+    if (!date) {
+        return availability;
+    }
+
+    const selectedDate = normalizeDateInput(date);
+    const selectedDateKey = getISTDateKey(selectedDate);
+    const dateOverride = (availability.dateSpecificSlots || []).find(
+        (entry) => getISTDateKey(entry.date) === selectedDateKey,
+    );
+
+    return {
+        ...availability.toObject(),
+        dateView: {
+            date: selectedDate,
+            slots: availability.getAvailableSlotsForDate(selectedDate),
+            source: dateOverride ? "date_specific" : "weekly",
+        },
+    };
+};
+
+const updateOwnAvailability = async (userId, updateData) => {
+    const availability = await getOrCreateAvailability(userId);
+
+    if (updateData.availableDays !== undefined) {
+        availability.availableDays = updateData.availableDays;
+    }
+    if (updateData.timeSlots) {
+        availability.timeSlots = updateData.timeSlots;
+    }
+    if (updateData.unavailableDates) {
+        availability.unavailableDates = updateData.unavailableDates;
+    }
+
+    availability.lastUpdatedBy = userId;
+    await availability.save();
+    return availability;
+};
+
+const setOwnAvailabilityForDate = async (userId, payload) => {
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+
+    const nextSlots = sortSlotStrings(
+        [...new Set((payload?.slots || []).map(normalizeSlotString))],
+    );
+
+    const availability = await getOrCreateAvailability(userId);
+    const existingSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const toRemove = existingSlots.filter((slot) => !nextSlots.includes(slot));
+
+    for (const slot of toRemove) {
+        await ensureSlotRemovalAllowed({
+            userId,
+            date: selectedDate,
+            slot,
+        });
+    }
+
+    availability.dateSpecificSlots = Array.isArray(availability.dateSpecificSlots)
+        ? availability.dateSpecificSlots
+        : [];
+
+    const selectedDateKey = getISTDateKey(selectedDate);
+    const index = availability.dateSpecificSlots.findIndex(
+        (entry) => getISTDateKey(entry.date) === selectedDateKey,
+    );
+
+    const entry = {
+        date: selectedDate,
+        slots: nextSlots,
+        updatedBy: userId,
+        updatedAt: new Date(),
+    };
+
+    if (index >= 0) {
+        availability.dateSpecificSlots[index] = entry;
+    } else {
+        availability.dateSpecificSlots.push(entry);
+    }
+
+    availability.lastUpdatedBy = userId;
+    await availability.save();
+
+    return {
+        date: selectedDate,
+        slots: nextSlots,
+        source: "date_specific",
+    };
+};
+
+const addOwnAvailabilitySlotForDate = async (userId, payload) => {
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+    const slot = normalizeSlotString(payload?.slot);
+
+    const availability = await getOrCreateAvailability(userId);
+    const currentSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const merged = sortSlotStrings([...new Set([...currentSlots, slot])]);
+
+    return setOwnAvailabilityForDate(userId, {
+        date: selectedDate,
+        slots: merged,
+    });
+};
+
+const removeOwnAvailabilitySlotForDate = async (userId, payload) => {
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+    const slot = normalizeSlotString(payload?.slot);
+
+    await ensureSlotRemovalAllowed({
+        userId,
+        date: selectedDate,
+        slot,
+    });
+
+    const availability = await getOrCreateAvailability(userId);
+    const currentSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const nextSlots = currentSlots.filter((item) => item !== slot);
+
+    return setOwnAvailabilityForDate(userId, {
+        date: selectedDate,
+        slots: nextSlots,
+    });
+};
+
 module.exports = {
     getDoctorDashboard,
     getDoctorAppointments,
     getTodayAppointments,
+    getUpcomingAppointments,
+    getOwnAvailability,
+    updateOwnAvailability,
+    setOwnAvailabilityForDate,
+    addOwnAvailabilitySlotForDate,
+    removeOwnAvailabilitySlotForDate,
     getAppointmentDetail,
     completeAppointment,
     callTodayQueuePatient,

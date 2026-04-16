@@ -9,6 +9,10 @@ const {
     approveAppointment,
     rejectAppointment,
     setDoctorAvailability,
+    getDoctorAvailabilityForAdmin,
+    setDoctorAvailabilityForDateByAdmin,
+    addDoctorAvailabilitySlotForDateByAdmin,
+    removeDoctorAvailabilitySlotForDateByAdmin,
     offlineBookAppointment,
     getVerifiedDoctorsForAdmin,
     getDoctorAvailableSlotsForAdmin,
@@ -215,6 +219,75 @@ const getDoctorAvailableSlotsController = async (req, res, next) => {
     }
 };
 
+const getDoctorAvailabilityController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const { date } = req.query;
+        const data = await getDoctorAvailabilityForAdmin(doctorId, date);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor availability retrieved",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const setDoctorAvailabilityForDateController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await setDoctorAvailabilityForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date availability updated",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const addDoctorAvailabilityDateSlotController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await addDoctorAvailabilitySlotForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date slot added",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const removeDoctorAvailabilityDateSlotController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await removeDoctorAvailabilitySlotForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date slot removed",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 const offlineBookAppointmentController = async (req, res, next) => {
     try {
         const data = await offlineBookAppointment(
@@ -329,6 +402,10 @@ module.exports = {
     approveAppointmentController,
     rejectAppointmentController,
     setDoctorAvailabilityController,
+    getDoctorAvailabilityController,
+    setDoctorAvailabilityForDateController,
+    addDoctorAvailabilityDateSlotController,
+    removeDoctorAvailabilityDateSlotController,
     offlineBookAppointmentController,
     getVerifiedDoctorsController,
     getDoctorAvailableSlotsController,

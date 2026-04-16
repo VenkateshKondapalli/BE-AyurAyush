@@ -26,6 +26,7 @@ const {
 } = require("../../../utils/appointmentNotifications");
 const { ChatHistoryModel } = require("../../../models/chatHistorySchema");
 const { getTreatmentSuggestions } = require("../treatments/services");
+const { createPaymentOrder } = require("../payments/services");
 
 const getPatientDashboard = async (userId) => {
     let patient = await PatientModel.findOne({ userId });
@@ -281,7 +282,7 @@ const bookAppointment = async (
                         doctorId,
                         date: appointmentDate,
                         timeSlot,
-                        status: "pending_admin_approval",
+                        status: "pending_payment",
                         urgencyLevel,
                         chatConversationId: conversationId,
                         symptoms: chatHistory.summary.symptoms,
@@ -377,6 +378,9 @@ const bookAppointment = async (
         UserModel.findById(userId).select("email"),
     ]);
 
+    // Create Razorpay payment order immediately after booking
+    const paymentOrder = await createPaymentOrder(userId, appointment._id);
+
     // Fire-and-forget email notification
     notifyAppointmentBooked(patientUser.email, {
         doctorName: doctorUser.name,
@@ -398,10 +402,11 @@ const bookAppointment = async (
         },
         date: appointment.date,
         timeSlot: appointment.timeSlot,
+        paymentOrder,
         estimatedApprovalTime:
             urgencyLevel === "emergency"
-                ? "Admin will review within 30 minutes"
-                : "Admin will review within 24 hours",
+                ? "Admin will review within 30 minutes after payment"
+                : "Admin will review within 24 hours after payment",
     };
 };
 
@@ -640,7 +645,7 @@ const cancelAppointment = async (userId, appointmentId) => {
         throw error;
     }
 
-    if (!["pending_admin_approval", "confirmed"].includes(appointment.status)) {
+    if (!["pending_payment", "pending_admin_approval", "confirmed"].includes(appointment.status)) {
         const error = new Error(
             `Cannot cancel appointment with status: ${appointment.status}`,
         );

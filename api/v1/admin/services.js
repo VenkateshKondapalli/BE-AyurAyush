@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const { customAlphabet } = require("nanoid");
+const { PaymentModel } = require("../../../models/paymentSchema");
+const { razorpay } = require("../../../utils/razorpayInstance");
 const { AppointmentModel } = require("../../../models/appointmentSchema");
 const { ChatHistoryModel } = require("../../../models/chatHistorySchema");
 const {
@@ -29,6 +31,7 @@ const {
     notifyDoctorOnboarded,
     notifyPatientTurnCalled,
 } = require("../../../utils/appointmentNotifications");
+const logger = require("../../../utils/logger");
 
 const generateTemporaryPassword = customAlphabet(
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789",
@@ -101,6 +104,18 @@ const appendQueueAudit = (appointment, eventData) => {
         at: new Date(),
         ...eventData,
     });
+};
+
+const SLOT_CAPACITY = 2;
+
+const buildSlotCountMap = (appointments) => {
+    const map = {};
+    appointments.forEach((apt) => {
+        const doctorId = (apt.doctorId?._id || apt.doctorId).toString();
+        const key = `${doctorId}__${apt.timeSlot}`;
+        map[key] = (map[key] || 0) + 1;
+    });
+    return map;
 };
 
 const getDashboardStats = async () => {
@@ -396,6 +411,16 @@ const getPendingNormalAppointments = async (query = {}) => {
         },
     }).select("name email phone gender dob");
     const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+    const slotCountMap = buildSlotCountMap(appointments);
+
+    // Batch fetch payment status for all appointments
+    const appointmentIds = appointments.map((apt) => apt._id);
+    const payments = await PaymentModel.find({
+        appointmentId: { $in: appointmentIds },
+    }).select("appointmentId status razorpayPaymentId paidAt amount");
+    const paymentMap = new Map(
+        payments.map((p) => [p.appointmentId.toString(), p]),
+    );
 
     const result = appointments.map((apt) => {
         const rawDoctorId = (apt.doctorId?._id || apt.doctorId)?.toString();
@@ -407,6 +432,8 @@ const getPendingNormalAppointments = async (query = {}) => {
         const doctor = doctorMap.get(doctorUserId);
         const patientUser = userMap.get(patientUserId);
         const doctorUser = userMap.get(doctorUserId);
+        const slotKey = `${rawDoctorId}__${apt.timeSlot}`;
+        const payment = paymentMap.get(apt._id.toString());
 
         return {
             appointmentId: apt._id,
@@ -438,6 +465,16 @@ const getPendingNormalAppointments = async (query = {}) => {
             },
             createdAt: apt.createdAt,
             waitingTime: calculateWaitingTime(apt.createdAt),
+            slotBookingCount: slotCountMap[slotKey] || 1,
+            slotCapacity: SLOT_CAPACITY,
+            payment: payment
+                ? {
+                      status: payment.status,
+                      razorpayPaymentId: payment.razorpayPaymentId,
+                      paidAt: payment.paidAt,
+                      amount: payment.amount ? Number((payment.amount / 100).toFixed(2)) : null,
+                  }
+                : null,
         };
     });
 
@@ -529,6 +566,7 @@ const getEmergencyAppointments = async (query = {}) => {
     );
     const chatMap = new Map(chatHistories.map((c) => [c.conversationId, c]));
     const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+    const slotCountMap = buildSlotCountMap(appointments);
 
     const result = appointments.map((apt) => {
         const rawDoctorId = (apt.doctorId?._id || apt.doctorId)?.toString();
@@ -541,6 +579,7 @@ const getEmergencyAppointments = async (query = {}) => {
         const patientUser = userMap.get(patientUserId);
         const doctorUser = userMap.get(doctorUserId);
         const chatHistory = chatMap.get(apt.chatConversationId);
+        const slotKey = `${rawDoctorId}__${apt.timeSlot}`;
 
         return {
             appointmentId: apt._id,
@@ -574,6 +613,8 @@ const getEmergencyAppointments = async (query = {}) => {
             createdAt: apt.createdAt,
             waitingTime: calculateWaitingTime(apt.createdAt),
             priority: "URGENT - EMERGENCY",
+            slotBookingCount: slotCountMap[slotKey] || 1,
+            slotCapacity: SLOT_CAPACITY,
         };
     });
 
@@ -602,8 +643,12 @@ const getTodayQueue = async () => {
         appointments.map(assignTokenIfMissing),
     );
 
+    const slotCountMap = buildSlotCountMap(normalizedAppointments);
+
     const queue = normalizedAppointments.map((apt) => {
         const deliveryMeta = getQueueDeliveryMeta(apt);
+        const doctorId = (apt.doctorId?._id || apt.doctorId).toString();
+        const slotKey = `${doctorId}__${apt.timeSlot}`;
         return {
             appointmentId: apt._id,
             status: apt.status,
@@ -650,6 +695,8 @@ const getTodayQueue = async () => {
                 id: apt.doctorId?._id,
                 name: apt.doctorId?.name || "Unassigned",
             },
+            slotBookingCount: slotCountMap[slotKey] || 1,
+            slotCapacity: SLOT_CAPACITY,
         };
     });
 
@@ -1236,6 +1283,44 @@ const rejectAppointment = async (appointmentId, adminUserId, reason) => {
 
     await appointment.rejectByAdmin(adminUserId, reason);
 
+    // Auto-refund if patient has paid
+    const payment = await PaymentModel.findOne({
+        appointmentId,
+        status: "paid",
+        refundStatus: "none",
+    });
+
+    if (payment) {
+        try {
+            const refund = await razorpay.payments.refund(
+                payment.razorpayPaymentId,
+                {
+                    amount: payment.amount,
+                    notes: {
+                        reason: reason || "Appointment rejected by admin",
+                        appointmentId: appointmentId.toString(),
+                        adminId: adminUserId.toString(),
+                    },
+                },
+            );
+            payment.refundId = refund.id;
+            payment.refundAmount = refund.amount;
+            payment.refundStatus = "initiated";
+            payment.refundReason = reason || "Appointment rejected by admin";
+            payment.refundInitiatedAt = new Date();
+            await payment.save();
+            logger.info("Auto-refund initiated on rejection", {
+                appointmentId,
+                refundId: refund.id,
+            });
+        } catch (refundErr) {
+            logger.error("Auto-refund failed on rejection", {
+                appointmentId,
+                error: refundErr.message,
+            });
+        }
+    }
+
     // Fetch patient and doctor info for notification
     const [patientUser, doctorUser] = await Promise.all([
         UserModel.findById(appointment.patientId).select("email"),
@@ -1253,6 +1338,7 @@ const rejectAppointment = async (appointmentId, adminUserId, reason) => {
         appointmentId: appointment._id,
         status: appointment.status,
         reason,
+        refundInitiated: !!payment,
     };
 };
 
@@ -1298,6 +1384,254 @@ const setDoctorAvailability = async (
         availableDays: availability.availableDays,
         timeSlots: availability.timeSlots,
     };
+};
+
+const normalizeDateInput = (dateLike) => {
+    const date = new Date(dateLike);
+    if (Number.isNaN(date.getTime())) {
+        const err = new Error("Invalid date");
+        err.statusCode = 400;
+        throw err;
+    }
+    date.setHours(0, 0, 0, 0);
+    return date;
+};
+
+const normalizeSlotString = (slot) => {
+    const value = String(slot || "").trim();
+    if (!/^\d{2}:\d{2}\s*-\s*\d{2}:\d{2}$/.test(value)) {
+        const err = new Error(
+            "Invalid slot format. Expected HH:mm - HH:mm, e.g. 09:00 - 10:00",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+    return value;
+};
+
+const sortSlotStrings = (slots = []) =>
+    [...slots].sort((a, b) => String(a).localeCompare(String(b)));
+
+const ensureDoctorExistsForAvailability = async (doctorId) => {
+    const doctor = await DoctorModel.findOne({
+        userId: doctorId,
+        isVerified: true,
+    });
+    if (!doctor) {
+        const err = new Error("Doctor not found or not verified");
+        err.statusCode = 404;
+        throw err;
+    }
+};
+
+const getOrCreateAvailabilityForDoctor = async (doctorId, adminUserId) => {
+    let availability = await DoctorAvailabiltyModel.findOne({ doctorId });
+    if (!availability) {
+        availability = await DoctorAvailabiltyModel.create({
+            doctorId,
+            availableDays: [],
+            timeSlots: {},
+            unavailableDates: [],
+            dateSpecificSlots: [],
+            setByAdmin: adminUserId,
+            lastUpdatedBy: adminUserId,
+        });
+    }
+    return availability;
+};
+
+const ensureFutureDate = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (date < today) {
+        const err = new Error("You can only manage upcoming dates");
+        err.statusCode = 400;
+        throw err;
+    }
+};
+
+const ensureAdminSlotRemovalAllowed = async ({ doctorId, date, slot }) => {
+    const now = Date.now();
+    const diffMs = date.getTime() - now;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    if (diffMs < sevenDaysMs) {
+        const err = new Error(
+            "Slot can only be removed if appointment date is at least 7 days away",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
+    const bookedCount = await AppointmentModel.countDocuments({
+        doctorId,
+        date: { $gte: dayStart, $lte: dayEnd },
+        timeSlot: slot,
+        status: { $nin: ["cancelled", "rejected"] },
+    });
+
+    if (bookedCount > 0) {
+        const err = new Error(
+            "Cannot remove this slot because at least one patient is already booked",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+};
+
+const getDoctorAvailabilityForAdmin = async (doctorId, date) => {
+    await ensureDoctorExistsForAvailability(doctorId);
+    const availability = await DoctorAvailabiltyModel.findOne({ doctorId });
+
+    if (!availability) {
+        return {
+            availableDays: [],
+            timeSlots: {},
+            unavailableDates: [],
+            dateSpecificSlots: [],
+            dateView: date
+                ? {
+                      date,
+                      slots: [],
+                      source: "none",
+                  }
+                : null,
+        };
+    }
+
+    if (!date) {
+        return availability;
+    }
+
+    const selectedDate = normalizeDateInput(date);
+    const selectedDateKey = getISTDateKey(selectedDate);
+    const dateOverride = (availability.dateSpecificSlots || []).find(
+        (entry) => getISTDateKey(entry.date) === selectedDateKey,
+    );
+
+    return {
+        ...availability.toObject(),
+        dateView: {
+            date: selectedDate,
+            slots: availability.getAvailableSlotsForDate(selectedDate),
+            source: dateOverride ? "date_specific" : "weekly",
+        },
+    };
+};
+
+const setDoctorAvailabilityForDateByAdmin = async (
+    doctorId,
+    adminUserId,
+    payload,
+) => {
+    await ensureDoctorExistsForAvailability(doctorId);
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+
+    const nextSlots = sortSlotStrings(
+        [...new Set((payload?.slots || []).map(normalizeSlotString))],
+    );
+
+    const availability = await getOrCreateAvailabilityForDoctor(
+        doctorId,
+        adminUserId,
+    );
+    const existingSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const toRemove = existingSlots.filter((slot) => !nextSlots.includes(slot));
+
+    for (const slot of toRemove) {
+        await ensureAdminSlotRemovalAllowed({
+            doctorId,
+            date: selectedDate,
+            slot,
+        });
+    }
+
+    availability.dateSpecificSlots = Array.isArray(availability.dateSpecificSlots)
+        ? availability.dateSpecificSlots
+        : [];
+
+    const selectedDateKey = getISTDateKey(selectedDate);
+    const index = availability.dateSpecificSlots.findIndex(
+        (entry) => getISTDateKey(entry.date) === selectedDateKey,
+    );
+
+    const entry = {
+        date: selectedDate,
+        slots: nextSlots,
+        updatedBy: adminUserId,
+        updatedAt: new Date(),
+    };
+
+    if (index >= 0) {
+        availability.dateSpecificSlots[index] = entry;
+    } else {
+        availability.dateSpecificSlots.push(entry);
+    }
+
+    availability.setByAdmin = adminUserId;
+    availability.lastUpdatedBy = adminUserId;
+    await availability.save();
+
+    return {
+        doctorId,
+        date: selectedDate,
+        slots: nextSlots,
+        source: "date_specific",
+    };
+};
+
+const addDoctorAvailabilitySlotForDateByAdmin = async (
+    doctorId,
+    adminUserId,
+    payload,
+) => {
+    await ensureDoctorExistsForAvailability(doctorId);
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+    const slot = normalizeSlotString(payload?.slot);
+
+    const availability = await getOrCreateAvailabilityForDoctor(
+        doctorId,
+        adminUserId,
+    );
+    const currentSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const merged = sortSlotStrings([...new Set([...currentSlots, slot])]);
+
+    return setDoctorAvailabilityForDateByAdmin(doctorId, adminUserId, {
+        date: selectedDate,
+        slots: merged,
+    });
+};
+
+const removeDoctorAvailabilitySlotForDateByAdmin = async (
+    doctorId,
+    adminUserId,
+    payload,
+) => {
+    await ensureDoctorExistsForAvailability(doctorId);
+    const selectedDate = normalizeDateInput(payload?.date);
+    ensureFutureDate(selectedDate);
+    const slot = normalizeSlotString(payload?.slot);
+
+    await ensureAdminSlotRemovalAllowed({
+        doctorId,
+        date: selectedDate,
+        slot,
+    });
+
+    const availability = await getOrCreateAvailabilityForDoctor(
+        doctorId,
+        adminUserId,
+    );
+    const currentSlots = availability.getAvailableSlotsForDate(selectedDate);
+    const nextSlots = currentSlots.filter((item) => item !== slot);
+
+    return setDoctorAvailabilityForDateByAdmin(doctorId, adminUserId, {
+        date: selectedDate,
+        slots: nextSlots,
+    });
 };
 
 const getVerifiedDoctorsForAdmin = async (query = {}) => {
@@ -1627,10 +1961,14 @@ module.exports = {
     offlineBookAppointment,
     getVerifiedDoctorsForAdmin,
     getDoctorAvailableSlotsForAdmin,
+    getDoctorAvailabilityForAdmin,
     getTodayQueue,
     callTodayQueuePatient,
     getQueueInsights,
     getAppointmentAuditTrail,
     batchDecideAppointments,
     getEmergencyDelays,
+    setDoctorAvailabilityForDateByAdmin,
+    addDoctorAvailabilitySlotForDateByAdmin,
+    removeDoctorAvailabilitySlotForDateByAdmin,
 };

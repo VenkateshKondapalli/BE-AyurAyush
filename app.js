@@ -112,6 +112,10 @@ app.get("/", (req, res) => {
 // app.use("/api/v1/auth", authLimiter);
 // app.use("/api/v1/otps", authLimiter);
 
+// Webhook route — bypasses CSRF (secured by Razorpay HMAC signature instead)
+const { paymentsRouter } = require("./api/v1/payments/routes");
+app.use("/api/v1/payments", paymentsRouter);
+
 app.use("/api/v1", csrfOriginCheckMiddleware, apiRouter);
 
 // Centralized error handler — must be after all routes

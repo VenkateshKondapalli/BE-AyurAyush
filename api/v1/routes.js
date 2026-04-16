@@ -6,6 +6,7 @@ const { adminsRouter } = require("./admin/routes");
 const { doctorsRouter } = require("./doctors/routes");
 const { chatRouter } = require("./chat/routes");
 const { treatmentsRouter } = require("./treatments/routes");
+const { superAdminRouter } = require("./super-admin/routes");
 
 const apiRouter = express.Router();
 
@@ -16,5 +17,6 @@ apiRouter.use("/admin", adminsRouter);
 apiRouter.use("/doctor", doctorsRouter);
 apiRouter.use("/chat", chatRouter);
 apiRouter.use("/treatments", treatmentsRouter);
+apiRouter.use("/super-admin", superAdminRouter);
 
 module.exports = { apiRouter };
