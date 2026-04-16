@@ -10,6 +10,7 @@ const {
     getPatientProfile,
     updatePatientProfile,
     getTreatmentSuggestionsForPatient,
+    getEmergencyDelayForDoctor,
 } = require("./services");
 
 const patientDashboardController = async (req, res, next) => {
@@ -180,6 +181,20 @@ const getTreatmentSuggestionsController = async (req, res, next) => {
     }
 };
 
+const getEmergencyDelayForDoctorController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await getEmergencyDelayForDoctor(doctorId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor emergency delay status retrieved",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     patientDashboardController,
     applyForDoctorRoleController,
@@ -192,4 +207,5 @@ module.exports = {
     getPatientProfileController,
     updatePatientProfileController,
     getTreatmentSuggestionsController,
+    getEmergencyDelayForDoctorController,
 };

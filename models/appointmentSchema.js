@@ -1,12 +1,18 @@
 const mongoose = require("mongoose");
 const { Schema, model } = mongoose;
+const { getISTDayBounds } = require("../utils/helpers");
 
 const appointmentSchema = new Schema(
     {
         patientId: {
             type: Schema.Types.ObjectId,
             ref: "user",
-            required: true,
+            default: null,
+        },
+        emergencyPatientId: {
+            type: Schema.Types.ObjectId,
+            ref: "emergencyPatient",
+            default: null,
         },
         doctorId: {
             type: Schema.Types.ObjectId,
@@ -22,20 +28,21 @@ const appointmentSchema = new Schema(
             required: true,
             trim: true,
             match: [
-                /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/,
+                /^(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}|EMERGENCY - IMMEDIATE)$/,
                 "Invalid time slot format (e.g. 09:00 - 10:00)",
             ],
         },
         status: {
             type: String,
             enum: [
+                "pending_payment",
                 "pending_admin_approval",
                 "confirmed",
                 "completed",
                 "cancelled",
                 "rejected",
             ],
-            default: "pending_admin_approval",
+            default: "pending_payment",
         },
         urgencyLevel: {
             type: String,
@@ -81,6 +88,75 @@ const appointmentSchema = new Schema(
             default: "",
             maxlength: 500,
         },
+        queueNotificationHistory: [
+            {
+                sentAt: {
+                    type: Date,
+                    default: Date.now,
+                },
+                channel: {
+                    type: String,
+                    enum: ["email_and_in_app", "in_app_only"],
+                    default: "in_app_only",
+                },
+                deliveryStatus: {
+                    type: String,
+                    enum: ["delivered", "unknown", "failed"],
+                    default: "delivered",
+                },
+                actorRole: {
+                    type: String,
+                    enum: ["admin", "doctor", "system"],
+                    default: "system",
+                },
+                actorId: {
+                    type: Schema.Types.ObjectId,
+                    ref: "user",
+                    default: null,
+                },
+                message: {
+                    type: String,
+                    default: "",
+                    maxlength: 500,
+                },
+            },
+        ],
+        queueAuditTrail: [
+            {
+                at: {
+                    type: Date,
+                    default: Date.now,
+                },
+                event: {
+                    type: String,
+                    default: "queue_update",
+                    maxlength: 100,
+                },
+                fromStatus: {
+                    type: String,
+                    default: null,
+                },
+                toStatus: {
+                    type: String,
+                    default: null,
+                },
+                actorRole: {
+                    type: String,
+                    enum: ["admin", "doctor", "system"],
+                    default: "system",
+                },
+                actorId: {
+                    type: Schema.Types.ObjectId,
+                    ref: "user",
+                    default: null,
+                },
+                note: {
+                    type: String,
+                    default: "",
+                    maxlength: 500,
+                },
+            },
+        ],
         consultationStartedAt: {
             type: Date,
             default: null,
@@ -189,12 +265,34 @@ const appointmentSchema = new Schema(
         feedback: {
             type: String,
         },
+        emergencyMetadata: {
+            isEmergencyTriage: {
+                type: Boolean,
+                default: false,
+            },
+            immediatePriority: {
+                type: Boolean,
+                default: false,
+            },
+            wardLocation: {
+                type: String,
+                default: "",
+            },
+        },
     },
     {
         timestamps: true,
         versionKey: false,
     },
 );
+
+appointmentSchema.pre("validate", function () {
+    if (!this.patientId && !this.emergencyPatientId) {
+        throw new Error(
+            "Either patientId or emergencyPatientId must be present",
+        );
+    }
+});
 
 appointmentSchema.index({ doctorId: 1, date: 1, timeSlot: 1 });
 appointmentSchema.index({ status: 1, urgencyLevel: 1 });
@@ -208,17 +306,19 @@ appointmentSchema.statics.isSlotAvailable = async function (
     date,
     timeSlot,
 ) {
-    const existingAppointment = await this.findOne({
+    const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
+    const existingAppointmentsCount = await this.countDocuments({
         doctorId,
         date: {
-            $gte: new Date(date).setHours(0, 0, 0, 0),
-            $lte: new Date(date).setHours(23, 59, 59, 999),
+            $gte: dayStart,
+            $lte: dayEnd,
         },
         timeSlot,
-        status: { $nin: ["cancelled", "rejected"] },
+        status: { $nin: ["cancelled", "rejected", "pending_payment"] },
     });
 
-    return !existingAppointment;
+    const SLOT_CAPACITY = 2;
+    return existingAppointmentsCount < SLOT_CAPACITY;
 };
 
 //method admin approves appointment

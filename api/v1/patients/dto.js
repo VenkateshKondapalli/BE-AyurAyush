@@ -1,3 +1,5 @@
+const { getISTDayBounds } = require("../../../utils/helpers");
+
 const VALID_QUEUE_TYPES = ["normal", "ayurveda", "panchakarma"];
 
 const bookAppointmentValidator = (req, res, next) => {
@@ -51,9 +53,8 @@ const bookAppointmentValidator = (req, res, next) => {
             .status(400)
             .json({ isSuccess: false, message: "Invalid date" });
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (appointmentDate < today) {
+    const { start: todayStartIST } = getISTDayBounds();
+    if (appointmentDate < todayStartIST) {
         return res.status(400).json({
             isSuccess: false,
             message: "Appointment date cannot be in the past",

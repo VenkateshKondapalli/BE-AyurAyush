@@ -55,6 +55,32 @@ const doctorSchema = new Schema(
         verifiedAt: {
             type: Date,
         },
+
+        // -------- Emergency Delay State --------
+        emergencyState: {
+            isActive: {
+                type: Boolean,
+                default: false,
+            },
+            reason: {
+                type: String,
+                default: "",
+            },
+            activatedAt: {
+                type: Date,
+                default: null,
+            },
+        },
+
+        // -------- Clinical Reference --------
+        customReferences: {
+            type: Schema.Types.Mixed,
+            default: {
+                medications: [],
+                procedures: [],
+                bestPractices: []
+            }
+        },
     },
     {
         timestamps: true,

@@ -17,6 +17,8 @@ const {
     formatAISummary,
     parsePagination,
     generateTokenNumber,
+    getISTDateKey,
+    getISTDayBounds,
 } = require("../../../utils/helpers");
 const {
     notifyAppointmentBooked,
@@ -24,6 +26,7 @@ const {
 } = require("../../../utils/appointmentNotifications");
 const { ChatHistoryModel } = require("../../../models/chatHistorySchema");
 const { getTreatmentSuggestions } = require("../treatments/services");
+const { createPaymentOrder } = require("../payments/services");
 
 const getPatientDashboard = async (userId) => {
     let patient = await PatientModel.findOne({ userId });
@@ -38,8 +41,7 @@ const getPatientDashboard = async (userId) => {
         });
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const { start: todayStartIST } = getISTDayBounds();
 
     const [
         totalAppointments,
@@ -52,7 +54,7 @@ const getPatientDashboard = async (userId) => {
         AppointmentModel.countDocuments({
             patientId: userId,
             status: { $in: ["pending_admin_approval", "confirmed"] },
-            date: { $gte: todayStart },
+            date: { $gte: todayStartIST },
         }),
         AppointmentModel.countDocuments({
             patientId: userId,
@@ -249,7 +251,7 @@ const bookAppointment = async (
 
     // Format queueDate as "YYYY-MM-DD" string (matches QueueTokenModel key)
     const appointmentDate = new Date(date);
-    const queueDate = appointmentDate.toISOString().slice(0, 10);
+    const queueDate = getISTDateKey(appointmentDate);
 
     // Use a MongoDB transaction to atomically:
     // 1. Increment the queue token counter
@@ -280,7 +282,7 @@ const bookAppointment = async (
                         doctorId,
                         date: appointmentDate,
                         timeSlot,
-                        status: "pending_admin_approval",
+                        status: "pending_payment",
                         urgencyLevel,
                         chatConversationId: conversationId,
                         symptoms: chatHistory.summary.symptoms,
@@ -306,9 +308,7 @@ const bookAppointment = async (
 
             // For Panchakarma: reserve therapist and room slots
             if (queueType === "panchakarma" && therapistId && roomId) {
-                const slotDate = new Date(
-                    appointmentDate.toISOString().slice(0, 10),
-                );
+                const slotDate = new Date(getISTDateKey(appointmentDate));
 
                 const [existingTherapist, existingRoom] = await Promise.all([
                     TherapyResourceModel.findOne(
@@ -378,6 +378,9 @@ const bookAppointment = async (
         UserModel.findById(userId).select("email"),
     ]);
 
+    // Create Razorpay payment order immediately after booking
+    const paymentOrder = await createPaymentOrder(userId, appointment._id);
+
     // Fire-and-forget email notification
     notifyAppointmentBooked(patientUser.email, {
         doctorName: doctorUser.name,
@@ -399,24 +402,37 @@ const bookAppointment = async (
         },
         date: appointment.date,
         timeSlot: appointment.timeSlot,
+        paymentOrder,
         estimatedApprovalTime:
             urgencyLevel === "emergency"
-                ? "Admin will review within 30 minutes"
-                : "Admin will review within 24 hours",
+                ? "Admin will review within 30 minutes after payment"
+                : "Admin will review within 24 hours after payment",
     };
 };
 
 const getPatientAppointments = async (userId, status, query = {}) => {
     const { page, limit, skip } = parsePagination(query);
     const filter = { patientId: userId };
+
     if (status) {
-        filter.status = status;
+        if (status === "upcoming") {
+            const { start: todayStartIST } = getISTDayBounds();
+            filter.status = { $in: ["pending_admin_approval", "confirmed"] };
+            filter.date = { $gte: todayStartIST };
+        } else if (status === "cancelled") {
+            filter.status = { $in: ["cancelled", "rejected"] };
+        } else {
+            filter.status = status;
+        }
     }
+
+    const sortOrder =
+        String(query.sort || "asc").toLowerCase() === "desc" ? -1 : 1;
 
     const [appointments, totalCount] = await Promise.all([
         AppointmentModel.find(filter)
             .populate("doctorId", "name email phone profilePhoto")
-            .sort({ date: -1, createdAt: -1 })
+            .sort({ date: sortOrder, createdAt: sortOrder })
             .skip(skip)
             .limit(limit),
         AppointmentModel.countDocuments(filter),
@@ -575,6 +591,27 @@ const getAppointmentDetails = async (userId, appointmentId) => {
             urgencyLevel: appointment.urgencyLevel,
             date: appointment.date,
             timeSlot: appointment.timeSlot,
+            consultationStartedAt: appointment.consultationStartedAt,
+            consultationEndedAt: appointment.consultationEndedAt,
+            consultationDurationSeconds: Number.isFinite(
+                Number(appointment.consultationDurationSeconds),
+            )
+                ? Number(appointment.consultationDurationSeconds)
+                : appointment.consultationStartedAt &&
+                    appointment.consultationEndedAt
+                  ? Math.max(
+                        0,
+                        Math.floor(
+                            (new Date(
+                                appointment.consultationEndedAt,
+                            ).getTime() -
+                                new Date(
+                                    appointment.consultationStartedAt,
+                                ).getTime()) /
+                                1000,
+                        ),
+                    )
+                  : null,
             symptoms: appointment.symptoms,
             aiSummary: appointment.aiSummary,
             adminNotes: appointment.adminNotes,
@@ -608,7 +645,7 @@ const cancelAppointment = async (userId, appointmentId) => {
         throw error;
     }
 
-    if (!["pending_admin_approval", "confirmed"].includes(appointment.status)) {
+    if (!["pending_payment", "pending_admin_approval", "confirmed"].includes(appointment.status)) {
         const error = new Error(
             `Cannot cancel appointment with status: ${appointment.status}`,
         );
@@ -786,6 +823,24 @@ const getTreatmentSuggestionsForPatient = async (conversationId, userId) => {
     return getTreatmentSuggestions(conversationId, userId);
 };
 
+const getEmergencyDelayForDoctor = async (doctorId) => {
+    const doctor = await DoctorModel.findOne({ userId: doctorId }).populate(
+        "userId",
+        "name",
+    );
+
+    if (!doctor || !doctor.emergencyState?.isActive) {
+        return null;
+    }
+
+    return {
+        doctorId: doctor.userId._id,
+        doctorName: doctor.userId.name,
+        reason: doctor.emergencyState.reason,
+        activatedAt: doctor.emergencyState.activatedAt,
+    };
+};
+
 module.exports = {
     getPatientDashboard,
     applyForDoctorRole,
@@ -795,7 +850,7 @@ module.exports = {
     getAppointmentDetails,
     cancelAppointment,
     getVerifiedDoctors,
-    getPatientProfile,
     updatePatientProfile,
     getTreatmentSuggestionsForPatient,
+    getEmergencyDelayForDoctor,
 };

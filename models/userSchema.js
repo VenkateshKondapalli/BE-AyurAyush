@@ -7,6 +7,7 @@ const ROLE_OPTIONS = {
     PATIENT: "patient",
     DOCTOR: "doctor",
     ADMIN: "admin",
+    SUB_ADMIN: "sub_admin",
 };
 
 const userSchema = new Schema(

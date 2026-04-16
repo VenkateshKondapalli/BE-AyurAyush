@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { Schema, model } = mongoose;
+const { getISTDayBounds, getISTDateKey } = require("../utils/helpers");
 
 const doctorAvailabiltySchema = new Schema(
     {
@@ -66,6 +67,27 @@ const doctorAvailabiltySchema = new Schema(
                 reason: String,
             },
         ],
+        dateSpecificSlots: [
+            {
+                date: {
+                    type: Date,
+                    required: true,
+                },
+                slots: [
+                    {
+                        type: String,
+                    },
+                ],
+                updatedBy: {
+                    type: Schema.Types.ObjectId,
+                    ref: "user",
+                },
+                updatedAt: {
+                    type: Date,
+                    default: Date.now,
+                },
+            },
+        ],
         setByAdmin: {
             type: Schema.Types.ObjectId,
             ref: "user",
@@ -83,6 +105,7 @@ const doctorAvailabiltySchema = new Schema(
 
 //method to get available slots for a specific date
 doctorAvailabiltySchema.methods.getAvailableSlotsForDate = function (date) {
+    const dateKey = getISTDateKey(date);
     const dayName = new Date(date).toLocaleDateString("en-US", {
         weekday: "long",
     });
@@ -99,6 +122,14 @@ doctorAvailabiltySchema.methods.getAvailableSlotsForDate = function (date) {
 
     if (isUnavailable) {
         return [];
+    }
+
+    const dateOverride = (this.dateSpecificSlots || []).find(
+        (entry) => getISTDateKey(entry.date) === dateKey,
+    );
+
+    if (dateOverride) {
+        return dateOverride.slots || [];
     }
 
     return this.timeSlots[dayName] || [];
@@ -120,19 +151,27 @@ doctorAvailabiltySchema.statics.getBookableSlots = async function (
         return [];
     }
 
+    const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
     const bookedAppointments = await AppointmentModel.find({
         doctorId,
         date: {
-            $gte: new Date(date).setHours(0, 0, 0, 0),
-            $lte: new Date(date).setHours(23, 59, 59, 999),
+            $gte: dayStart,
+            $lte: dayEnd,
         },
         status: { $nin: ["cancelled", "rejected"] },
     }).select("timeSlot");
 
     const bookedSlots = bookedAppointments.map((apt) => apt.timeSlot);
 
+    const slotCounts = bookedSlots.reduce((acc, slot) => {
+        acc[slot] = (acc[slot] || 0) + 1;
+        return acc;
+    }, {});
+
+    const SLOT_CAPACITY = 2; // Hardcoded capacity requirement
+
     const availableSlots = allSlots.filter(
-        (slot) => !bookedSlots.includes(slot),
+        (slot) => (slotCounts[slot] || 0) < SLOT_CAPACITY,
     );
 
     return availableSlots;

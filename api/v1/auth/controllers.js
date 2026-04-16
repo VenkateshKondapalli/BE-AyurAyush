@@ -90,6 +90,22 @@ const getCurrentUserController = async (req, res, next) => {
             });
         }
 
+        // Attach subAdminProfile if user is a sub-admin
+        let subAdminProfile = null;
+        if (user.roles.includes("sub_admin")) {
+            const { SubAdminProfileModel } = require("../../../models/subAdminProfileSchema");
+            const profile = await SubAdminProfileModel.findOne({
+                userId,
+                isActive: true,
+            }).select("queueScope permissions isActive");
+            if (profile) {
+                subAdminProfile = {
+                    queueScope: profile.queueScope,
+                    permissions: profile.permissions,
+                };
+            }
+        }
+
         res.status(200).json({
             isSuccess: true,
             data: {
@@ -97,6 +113,7 @@ const getCurrentUserController = async (req, res, next) => {
                 name: user.name,
                 roles: user.roles,
                 mustChangePassword: !!user.mustChangePassword,
+                subAdminProfile,
             },
         });
     } catch (err) {

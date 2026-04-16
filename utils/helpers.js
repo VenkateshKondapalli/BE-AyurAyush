@@ -53,6 +53,47 @@ const parsePagination = (query) => {
     return { page, limit, skip };
 };
 
+const IST_TIME_ZONE = "Asia/Kolkata";
+const IST_OFFSET_MINUTES = 330;
+
+const getISTDateParts = (dateLike = new Date()) => {
+    const rawDate = new Date(dateLike);
+    const referenceDate = Number.isNaN(rawDate.getTime())
+        ? new Date()
+        : rawDate;
+
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: IST_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(referenceDate);
+
+    const year = Number(parts.find((p) => p.type === "year")?.value);
+    const month = Number(parts.find((p) => p.type === "month")?.value);
+    const day = Number(parts.find((p) => p.type === "day")?.value);
+
+    return { year, month, day };
+};
+
+const getISTDateKey = (dateLike = new Date()) => {
+    const { year, month, day } = getISTDateParts(dateLike);
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+};
+
+const getISTDayBounds = (dateLike = new Date()) => {
+    const { year, month, day } = getISTDateParts(dateLike);
+    const startUtcMs =
+        Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+        IST_OFFSET_MINUTES * 60 * 1000;
+    const endUtcMs = startUtcMs + 24 * 60 * 60 * 1000 - 1;
+
+    return {
+        start: new Date(startUtcMs),
+        end: new Date(endUtcMs),
+    };
+};
+
 // Generates a deterministic, human-readable token number.
 // Format: AYU-YYYYMMDD-DR{XX}-{SSS}
 //   XX  = 2-digit number derived from the last 4 hex chars of doctorId (0-99)
@@ -73,4 +114,6 @@ module.exports = {
     formatAISummary,
     parsePagination,
     generateTokenNumber,
+    getISTDateKey,
+    getISTDayBounds,
 };

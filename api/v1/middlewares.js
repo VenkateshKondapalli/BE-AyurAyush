@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { ROLE_OPTIONS } = require("../../models/userSchema");
 const { UserModel } = require("../../models/userSchema");
+const { SubAdminProfileModel } = require("../../models/subAdminProfileSchema");
 const logger = require("../../utils/logger");
 
 const validateLoggedInUserMiddleware = (req, res, next) => {
@@ -198,10 +199,115 @@ const validateDoctorRole = (req, res, next) => {
     }
 };
 
+// Super admin = existing "admin" role
+const validateSuperAdminMiddleware = (req, res, next) => {
+    try {
+        const { roles } = req.currentUser;
+        if (roles && roles.includes(ROLE_OPTIONS.ADMIN)) {
+            req.currentAdmin = req.currentUser;
+            req.isSuperAdmin = true;
+            return next();
+        }
+        return res.status(403).json({
+            isSuccess: false,
+            message: "Super admin access only",
+        });
+    } catch (err) {
+        logger.error("Error in validateSuperAdminMiddleware", { error: err.message });
+        res.status(500).json({ isSuccess: false, message: "Internal Server Error" });
+    }
+};
+
+// Sub-admin role check — attaches subAdminProfile to req
+const validateSubAdminMiddleware = async (req, res, next) => {
+    try {
+        const { roles, userId } = req.currentUser;
+        if (!roles || !roles.includes(ROLE_OPTIONS.SUB_ADMIN)) {
+            return res.status(403).json({
+                isSuccess: false,
+                message: "Sub-admin access only",
+            });
+        }
+        const profile = await SubAdminProfileModel.findOne({
+            userId,
+            isActive: true,
+        });
+        if (!profile) {
+            return res.status(403).json({
+                isSuccess: false,
+                message: "Sub-admin profile not found or deactivated",
+            });
+        }
+        req.subAdminProfile = profile;
+        req.currentAdmin = req.currentUser;
+        return next();
+    } catch (err) {
+        logger.error("Error in validateSubAdminMiddleware", { error: err.message });
+        res.status(500).json({ isSuccess: false, message: "Internal Server Error" });
+    }
+};
+
+// Allows both super-admin and sub-admin — attaches subAdminProfile if sub-admin
+const validateAnyAdminMiddleware = async (req, res, next) => {
+    try {
+        const { roles, userId } = req.currentUser;
+        if (roles && roles.includes(ROLE_OPTIONS.ADMIN)) {
+            req.currentAdmin = req.currentUser;
+            req.isSuperAdmin = true;
+            return next();
+        }
+        if (roles && roles.includes(ROLE_OPTIONS.SUB_ADMIN)) {
+            const profile = await SubAdminProfileModel.findOne({
+                userId,
+                isActive: true,
+            });
+            if (!profile) {
+                return res.status(403).json({
+                    isSuccess: false,
+                    message: "Sub-admin profile not found or deactivated",
+                });
+            }
+            req.subAdminProfile = profile;
+            req.currentAdmin = req.currentUser;
+            req.isSuperAdmin = false;
+            return next();
+        }
+        return res.status(403).json({
+            isSuccess: false,
+            message: "Admin access required",
+        });
+    } catch (err) {
+        logger.error("Error in validateAnyAdminMiddleware", { error: err.message });
+        res.status(500).json({ isSuccess: false, message: "Internal Server Error" });
+    }
+};
+
+// Permission check middleware factory — use after validateAnyAdminMiddleware
+const checkPermission = (permission) => (req, res, next) => {
+    // Super admin always passes
+    if (req.isSuperAdmin) return next();
+
+    const profile = req.subAdminProfile;
+    if (!profile) {
+        return res.status(403).json({ isSuccess: false, message: "No admin profile" });
+    }
+    if (!profile.permissions?.[permission]) {
+        return res.status(403).json({
+            isSuccess: false,
+            message: `You do not have permission: ${permission}`,
+        });
+    }
+    return next();
+};
+
 module.exports = {
     validateLoggedInUserMiddleware,
     validateIsAdminMiddleware,
     validatePatientRole,
     validatePatientOrAdminRole,
     validateDoctorRole,
+    validateSuperAdminMiddleware,
+    validateSubAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission,
 };

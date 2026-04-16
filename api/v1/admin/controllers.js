@@ -9,11 +9,19 @@ const {
     approveAppointment,
     rejectAppointment,
     setDoctorAvailability,
+    getDoctorAvailabilityForAdmin,
+    setDoctorAvailabilityForDateByAdmin,
+    addDoctorAvailabilitySlotForDateByAdmin,
+    removeDoctorAvailabilitySlotForDateByAdmin,
     offlineBookAppointment,
     getVerifiedDoctorsForAdmin,
     getDoctorAvailableSlotsForAdmin,
     getTodayQueue,
     callTodayQueuePatient,
+    getQueueInsights,
+    getAppointmentAuditTrail,
+    batchDecideAppointments,
+    getEmergencyDelays,
 } = require("./services");
 
 const adminDashboardController = async (req, res, next) => {
@@ -211,6 +219,75 @@ const getDoctorAvailableSlotsController = async (req, res, next) => {
     }
 };
 
+const getDoctorAvailabilityController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const { date } = req.query;
+        const data = await getDoctorAvailabilityForAdmin(doctorId, date);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor availability retrieved",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const setDoctorAvailabilityForDateController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await setDoctorAvailabilityForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date availability updated",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const addDoctorAvailabilityDateSlotController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await addDoctorAvailabilitySlotForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date slot added",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const removeDoctorAvailabilityDateSlotController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await removeDoctorAvailabilitySlotForDateByAdmin(
+            doctorId,
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor date slot removed",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 const offlineBookAppointmentController = async (req, res, next) => {
     try {
         const data = await offlineBookAppointment(
@@ -259,6 +336,61 @@ const callPatientController = async (req, res, next) => {
     }
 };
 
+const getQueueInsightsController = async (req, res, next) => {
+    try {
+        const data = await getQueueInsights();
+        res.status(200).json({
+            isSuccess: true,
+            message: "Queue insights loaded successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const getAppointmentAuditTrailController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await getAppointmentAuditTrail(appointmentId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Appointment audit trail loaded successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const batchDecideAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await batchDecideAppointments(
+            req.currentAdmin.userId,
+            req.body,
+        );
+        res.status(200).json({
+            isSuccess: true,
+            message: "Batch decision processed",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+const getEmergencyDelaysController = async (req, res, next) => {
+    try {
+        const data = await getEmergencyDelays();
+        res.status(200).json({
+            isSuccess: true,
+            message: "Active emergency delays retrieved",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     adminDashboardController,
     createDoctorAccountController,
@@ -270,9 +402,17 @@ module.exports = {
     approveAppointmentController,
     rejectAppointmentController,
     setDoctorAvailabilityController,
+    getDoctorAvailabilityController,
+    setDoctorAvailabilityForDateController,
+    addDoctorAvailabilityDateSlotController,
+    removeDoctorAvailabilityDateSlotController,
     offlineBookAppointmentController,
     getVerifiedDoctorsController,
     getDoctorAvailableSlotsController,
     getTodayQueueController,
     callPatientController,
+    getQueueInsightsController,
+    getAppointmentAuditTrailController,
+    batchDecideAppointmentsController,
+    getEmergencyDelaysController,
 };

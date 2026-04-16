@@ -2,6 +2,8 @@ const express = require("express");
 const {
     validateLoggedInUserMiddleware,
     validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission,
 } = require("../middlewares");
 const {
     adminDashboardController,
@@ -16,9 +18,17 @@ const {
     approveAppointmentController,
     rejectAppointmentController,
     setDoctorAvailabilityController,
+    getDoctorAvailabilityController,
+    setDoctorAvailabilityForDateController,
+    addDoctorAvailabilityDateSlotController,
+    removeDoctorAvailabilityDateSlotController,
     offlineBookAppointmentController,
-    getTodayQueueController,
+    getQueueInsightsController,
+    getAppointmentAuditTrailController,
+    batchDecideAppointmentsController,
+    getEmergencyDelaysController,
     callPatientController,
+    getTodayQueueController,
 } = require("./controllers");
 const {
     rejectAppointmentValidator,
@@ -29,6 +39,7 @@ const {
 
 const adminsRouter = express.Router();
 
+// Super-admin only (existing behaviour unchanged)
 adminsRouter.get(
     "/dashboard",
     validateLoggedInUserMiddleware,
@@ -44,25 +55,13 @@ adminsRouter.post(
     createDoctorAccountController,
 );
 
+// Doctor applications — super-admin or sub-admin with viewDoctorApplications
 adminsRouter.get(
     "/doctor-applications",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewDoctorApplications"),
     reviewDoctorApplicationsController,
-);
-
-adminsRouter.get(
-    "/doctors",
-    validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
-    getVerifiedDoctorsController,
-);
-
-adminsRouter.get(
-    "/doctors/:doctorId/available-slots",
-    validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
-    getDoctorAvailableSlotsController,
 );
 
 adminsRouter.post(
@@ -79,63 +78,158 @@ adminsRouter.post(
     rejectDoctorApplicationController,
 );
 
+// Doctors list — super-admin or sub-admin with viewDoctors
 adminsRouter.get(
-    "/appointments/today-queue",
+    "/doctors",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
-    getTodayQueueController,
+    validateAnyAdminMiddleware,
+    checkPermission("viewDoctors"),
+    getVerifiedDoctorsController,
+);
+
+adminsRouter.get(
+    "/doctors/:doctorId/available-slots",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewDoctors"),
+    getDoctorAvailableSlotsController,
+);
+
+// Availability management — super-admin or sub-admin with manageAvailability
+adminsRouter.put(
+    "/doctors/:doctorId/availability",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("manageAvailability"),
+    setDoctorAvailabilityValidator,
+    setDoctorAvailabilityController,
+);
+
+adminsRouter.get(
+    "/doctors/:doctorId/availability",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("manageAvailability"),
+    getDoctorAvailabilityController,
+);
+
+adminsRouter.put(
+    "/doctors/:doctorId/availability/date",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("manageAvailability"),
+    setDoctorAvailabilityForDateController,
 );
 
 adminsRouter.post(
-    "/appointments/:appointmentId/call",
+    "/doctors/:doctorId/availability/date/slot",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
-    callPatientController,
+    validateAnyAdminMiddleware,
+    checkPermission("manageAvailability"),
+    addDoctorAvailabilityDateSlotController,
+);
+
+adminsRouter.delete(
+    "/doctors/:doctorId/availability/date/slot",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("manageAvailability"),
+    removeDoctorAvailabilityDateSlotController,
+);
+
+// Queue viewing — sub-admin with viewQueues (filtered by queueScope in controller)
+adminsRouter.get(
+    "/appointments/today-queue",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
+    getTodayQueueController,
 );
 
 adminsRouter.get(
     "/appointments/pending",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
     getPendingNormalAppointmentsController,
 );
 
 adminsRouter.get(
     "/appointments/emergency",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
     getEmergencyAppointmentsController,
 );
 
+adminsRouter.get(
+    "/appointments/queue-insights",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
+    getQueueInsightsController,
+);
+
+// Approve/Reject — sub-admin with approveAppointments
 adminsRouter.post(
     "/appointments/:appointmentId/approve",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("approveAppointments"),
     approveAppointmentController,
 );
 
 adminsRouter.post(
     "/appointments/:appointmentId/reject",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("approveAppointments"),
     rejectAppointmentValidator,
     rejectAppointmentController,
 );
 
-adminsRouter.put(
-    "/doctors/:doctorId/availability",
+adminsRouter.post(
+    "/appointments/batch-decision",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
-    setDoctorAvailabilityValidator,
-    setDoctorAvailabilityController,
+    validateAnyAdminMiddleware,
+    checkPermission("approveAppointments"),
+    batchDecideAppointmentsController,
 );
 
+// Call patients — sub-admin with callPatients
+adminsRouter.post(
+    "/appointments/:appointmentId/call",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("callPatients"),
+    callPatientController,
+);
+
+// Offline booking — sub-admin with offlineBooking
 adminsRouter.post(
     "/appointments/offline-book",
     validateLoggedInUserMiddleware,
-    validateIsAdminMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("offlineBooking"),
     offlineBookValidator,
     offlineBookAppointmentController,
+);
+
+// Audit trail + emergency delays — any admin
+adminsRouter.get(
+    "/appointments/:appointmentId/audit-trail",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
+    getAppointmentAuditTrailController,
+);
+
+adminsRouter.get(
+    "/emergency-delays",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    checkPermission("viewQueues"),
+    getEmergencyDelaysController,
 );
 
 module.exports = { adminsRouter };

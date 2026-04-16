@@ -14,6 +14,7 @@ const {
     getPatientProfileController,
     updatePatientProfileController,
     getTreatmentSuggestionsController,
+    getEmergencyDelayForDoctorController,
 } = require("./controllers");
 const {
     bookAppointmentValidator,
@@ -103,6 +104,13 @@ patientsRouter.get(
     validateLoggedInUserMiddleware,
     validatePatientRole,
     getTreatmentSuggestionsController,
+);
+
+// Get emergency delay status for a doctor
+patientsRouter.get(
+    "/emergency-delay/:doctorId",
+    validateLoggedInUserMiddleware,
+    getEmergencyDelayForDoctorController,
 );
 
 module.exports = { patientsRouter };

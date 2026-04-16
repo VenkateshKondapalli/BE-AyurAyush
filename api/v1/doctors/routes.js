@@ -7,6 +7,7 @@ const {
     doctorDashboardController,
     getDoctorAppointmentsController,
     getTodayAppointmentsController,
+    getUpcomingAppointmentsController,
     getAppointmentDetailController,
     completeAppointmentController,
     callTodayQueuePatientController,
@@ -14,6 +15,15 @@ const {
     startConsultationController,
     getDoctorProfileController,
     updateDoctorProfileController,
+    activateEmergencyDelayController,
+    deactivateEmergencyDelayController,
+    getCustomReferencesController,
+    addCustomReferenceController,
+    getOwnAvailabilityController,
+    updateOwnAvailabilityController,
+    setOwnAvailabilityForDateController,
+    addOwnAvailabilitySlotForDateController,
+    removeOwnAvailabilitySlotForDateController,
 } = require("./controllers");
 const {
     updateDoctorProfileValidator,
@@ -44,6 +54,14 @@ doctorsRouter.get(
     validateLoggedInUserMiddleware,
     validateDoctorRole,
     getTodayAppointmentsController,
+);
+
+// Get upcoming appointments
+doctorsRouter.get(
+    "/appointments/upcoming",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getUpcomingAppointmentsController,
 );
 
 // Queue controls
@@ -100,6 +118,72 @@ doctorsRouter.put(
     validateDoctorRole,
     updateDoctorProfileValidator,
     updateDoctorProfileController,
+);
+
+// Emergency Delay
+doctorsRouter.post(
+    "/emergency-delay/activate",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    activateEmergencyDelayController,
+);
+
+doctorsRouter.post(
+    "/emergency-delay/deactivate",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    deactivateEmergencyDelayController,
+);
+
+// Custom references
+doctorsRouter.get(
+    "/references",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getCustomReferencesController,
+);
+
+doctorsRouter.post(
+    "/references",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    addCustomReferenceController,
+);
+
+// Availability
+doctorsRouter.get(
+    "/availability",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getOwnAvailabilityController,
+);
+
+doctorsRouter.put(
+    "/availability",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    updateOwnAvailabilityController,
+);
+
+doctorsRouter.put(
+    "/availability/date",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    setOwnAvailabilityForDateController,
+);
+
+doctorsRouter.post(
+    "/availability/date/slot",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    addOwnAvailabilitySlotForDateController,
+);
+
+doctorsRouter.delete(
+    "/availability/date/slot",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    removeOwnAvailabilitySlotForDateController,
 );
 
 module.exports = {
