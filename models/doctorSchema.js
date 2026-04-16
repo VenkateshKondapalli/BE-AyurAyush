@@ -71,6 +71,16 @@ const doctorSchema = new Schema(
                 default: null,
             },
         },
+
+        // -------- Clinical Reference --------
+        customReferences: {
+            type: Schema.Types.Mixed,
+            default: {
+                medications: [],
+                procedures: [],
+                bestPractices: []
+            }
+        },
     },
     {
         timestamps: true,

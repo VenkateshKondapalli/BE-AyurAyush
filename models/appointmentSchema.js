@@ -7,7 +7,12 @@ const appointmentSchema = new Schema(
         patientId: {
             type: Schema.Types.ObjectId,
             ref: "user",
-            required: true,
+            default: null,
+        },
+        emergencyPatientId: {
+            type: Schema.Types.ObjectId,
+            ref: "emergencyPatient",
+            default: null,
         },
         doctorId: {
             type: Schema.Types.ObjectId,
@@ -23,7 +28,7 @@ const appointmentSchema = new Schema(
             required: true,
             trim: true,
             match: [
-                /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/,
+                /^(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}|EMERGENCY - IMMEDIATE)$/,
                 "Invalid time slot format (e.g. 09:00 - 10:00)",
             ],
         },
@@ -259,12 +264,34 @@ const appointmentSchema = new Schema(
         feedback: {
             type: String,
         },
+        emergencyMetadata: {
+            isEmergencyTriage: {
+                type: Boolean,
+                default: false,
+            },
+            immediatePriority: {
+                type: Boolean,
+                default: false,
+            },
+            wardLocation: {
+                type: String,
+                default: "",
+            },
+        },
     },
     {
         timestamps: true,
         versionKey: false,
     },
 );
+
+appointmentSchema.pre("validate", function () {
+    if (!this.patientId && !this.emergencyPatientId) {
+        throw new Error(
+            "Either patientId or emergencyPatientId must be present",
+        );
+    }
+});
 
 appointmentSchema.index({ doctorId: 1, date: 1, timeSlot: 1 });
 appointmentSchema.index({ status: 1, urgencyLevel: 1 });

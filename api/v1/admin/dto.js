@@ -123,13 +123,38 @@ const setDoctorAvailabilityValidator = (req, res, next) => {
 
 const offlineBookValidator = (req, res, next) => {
     try {
-        const { patientEmail, doctorId, date, timeSlot } = req.body;
+        const {
+            patientEmail,
+            doctorId,
+            date,
+            timeSlot,
+            isEmergencyTriage,
+            emergencyPatientName,
+        } = req.body;
 
-        if (!patientEmail || !doctorId || !date || !timeSlot) {
+        if (!doctorId) {
+            return res.status(400).json({
+                isSuccess: false,
+                message: "doctorId is required",
+            });
+        }
+
+        if (isEmergencyTriage) {
+            if (!emergencyPatientName) {
+                return res.status(400).json({
+                    isSuccess: false,
+                    message:
+                        "emergencyPatientName is required for emergency triage booking",
+                });
+            }
+            return next();
+        }
+
+        if (!patientEmail || !date || !timeSlot) {
             return res.status(400).json({
                 isSuccess: false,
                 message:
-                    "patientEmail, doctorId, date, and timeSlot are required",
+                    "patientEmail, doctorId, date, and timeSlot are required for standard offline booking",
             });
         }
 

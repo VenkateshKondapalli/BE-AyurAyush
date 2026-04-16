@@ -11,6 +11,8 @@ const {
     updateDoctorProfile,
     activateEmergencyDelay,
     deactivateEmergencyDelay,
+    getCustomReferences,
+    addCustomReference,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
@@ -237,6 +239,39 @@ const deactivateEmergencyDelayController = async (req, res, next) => {
     }
 };
 
+const getCustomReferencesController = async (req, res, next) => {
+    try {
+        const data = await getCustomReferences(req.currentDoctor.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Custom references retrieved",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in getCustomReferencesController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
+const addCustomReferenceController = async (req, res, next) => {
+    try {
+        const { activeTab, itemPayload } = req.body;
+        const data = await addCustomReference(req.currentDoctor.userId, activeTab, itemPayload);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Custom reference added successfully",
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in addCustomReferenceController", {
+            error: err.message,
+        });
+        next(err);
+    }
+};
+
 module.exports = {
     doctorDashboardController,
     getDoctorAppointmentsController,
@@ -250,4 +285,6 @@ module.exports = {
     updateDoctorProfileController,
     activateEmergencyDelayController,
     deactivateEmergencyDelayController,
+    getCustomReferencesController,
+    addCustomReferenceController,
 };

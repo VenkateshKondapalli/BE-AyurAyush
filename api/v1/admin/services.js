@@ -11,6 +11,9 @@ const {
 } = require("../../../models/doctorAvailabilitySchema");
 const { UserModel, ROLE_OPTIONS } = require("../../../models/userSchema");
 const { PatientModel } = require("../../../models/patientSchema");
+const {
+    EmergencyPatientModel,
+} = require("../../../models/emergencyPatientSchema");
 const { QueueTokenModel } = require("../../../models/queueTokenSchema");
 const {
     calculateAge,
@@ -591,6 +594,7 @@ const getTodayQueue = async () => {
         status: { $in: ["confirmed", "completed"] },
     })
         .populate("patientId", "name email")
+        .populate("emergencyPatientId", "displayName phone wardLocation")
         .populate("doctorId", "name")
         .sort({ tokenSequence: 1, timeSlot: 1, createdAt: 1 });
 
@@ -632,9 +636,15 @@ const getTodayQueue = async () => {
             timeSlot: apt.timeSlot,
             queueType: apt.queueType || "normal",
             patient: {
-                id: apt.patientId?._id,
-                name: apt.patientId?.name || "Patient",
+                id: apt.patientId?._id || apt.emergencyPatientId?._id,
+                name:
+                    apt.patientId?.name ||
+                    apt.emergencyPatientId?.displayName ||
+                    "Patient",
                 email: apt.patientId?.email,
+                phone: apt.emergencyPatientId?.phone || "",
+                wardLocation: apt.emergencyPatientId?.wardLocation || "",
+                isEmergencyTriage: !!apt.emergencyPatientId,
             },
             doctor: {
                 id: apt.doctorId?._id,
@@ -658,6 +668,7 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
         status: "confirmed",
     })
         .populate("patientId", "name email")
+        .populate("emergencyPatientId", "displayName")
         .populate("doctorId", "name");
 
     if (!appointment) {
@@ -682,13 +693,15 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
 
     if (firstCall) {
         appointment.firstCallEmailSentAt = now;
-        notifyPatientTurnCalled(appointment.patientId?.email, {
-            patientName: appointment.patientId?.name,
-            doctorName: appointment.doctorId?.name || "Doctor",
-            date: appointment.date,
-            timeSlot: appointment.timeSlot,
-            tokenNumber: appointment.tokenNumber,
-        });
+        if (appointment.patientId?.email) {
+            notifyPatientTurnCalled(appointment.patientId.email, {
+                patientName: appointment.patientId?.name,
+                doctorName: appointment.doctorId?.name || "Doctor",
+                date: appointment.date,
+                timeSlot: appointment.timeSlot,
+                tokenNumber: appointment.tokenNumber,
+            });
+        }
     }
 
     appointment.queueNotificationHistory = Array.isArray(
@@ -724,7 +737,10 @@ const callTodayQueuePatient = async (appointmentId, adminUserId) => {
         queueCallCount: appointment.queueCallCount,
         firstCallEmailSent: firstCall,
         notificationMode: firstCall ? "email_and_in_app" : "in_app_only",
-        patientName: appointment.patientId?.name || "Patient",
+        patientName:
+            appointment.patientId?.name ||
+            appointment.emergencyPatientId?.displayName ||
+            "Patient",
         tokenNumber: appointment.tokenNumber,
     };
 };
@@ -1398,14 +1414,12 @@ const offlineBookAppointment = async (adminId, bookingData) => {
         symptoms,
         urgencyLevel,
         adminNotes,
+        isEmergencyTriage,
+        emergencyPatientName,
+        emergencyPatientPhone,
+        emergencyConditionSummary,
+        emergencyWardLocation,
     } = bookingData;
-
-    const patientUser = await UserModel.findOne({ email: patientEmail });
-    if (!patientUser) {
-        const err = new Error("Patient not found with this email");
-        err.statusCode = 404;
-        throw err;
-    }
 
     const doctor = await DoctorModel.findOne({
         userId: doctorId,
@@ -1418,16 +1432,28 @@ const offlineBookAppointment = async (adminId, bookingData) => {
         throw err;
     }
 
-    const isAvailable = await AppointmentModel.isSlotAvailable(
-        doctorId,
-        date,
-        timeSlot,
-    );
+    const emergencyMode = !!isEmergencyTriage;
+    let patientUser = null;
 
-    if (!isAvailable) {
-        const err = new Error("This time slot is already booked");
-        err.statusCode = 409;
-        throw err;
+    if (!emergencyMode) {
+        patientUser = await UserModel.findOne({ email: patientEmail });
+        if (!patientUser) {
+            const err = new Error("Patient not found with this email");
+            err.statusCode = 404;
+            throw err;
+        }
+
+        const isAvailable = await AppointmentModel.isSlotAvailable(
+            doctorId,
+            date,
+            timeSlot,
+        );
+
+        if (!isAvailable) {
+            const err = new Error("This time slot is already booked");
+            err.statusCode = 409;
+            throw err;
+        }
     }
 
     const session = await mongoose.startSession();
@@ -1435,48 +1461,94 @@ const offlineBookAppointment = async (adminId, bookingData) => {
 
     try {
         await session.withTransaction(async () => {
-            let patient = await PatientModel.findOne(
-                { userId: patientUser._id },
-                null,
-                { session },
-            );
+            const appointmentDate = emergencyMode ? new Date() : new Date(date);
+            const slotLabel = emergencyMode
+                ? "EMERGENCY - IMMEDIATE"
+                : timeSlot;
 
-            if (!patient) {
-                const createdPatients = await PatientModel.create(
-                    [
-                        {
-                            userId: patientUser._id,
-                            bloodGroup: null,
-                            medicalHistory: [],
-                            allergies: [],
-                            emergencyContact: {},
-                        },
-                    ],
+            let patient = null;
+            let emergencyPatient = null;
+
+            if (emergencyMode) {
+                const createdEmergencyPatients =
+                    await EmergencyPatientModel.create(
+                        [
+                            {
+                                displayName: emergencyPatientName,
+                                phone: emergencyPatientPhone || "",
+                                conditionSummary:
+                                    emergencyConditionSummary ||
+                                    "Unconscious / critical condition",
+                                wardLocation:
+                                    emergencyWardLocation || "Emergency Ward",
+                                createdByAdminId: adminId,
+                            },
+                        ],
+                        { session },
+                    );
+                emergencyPatient = createdEmergencyPatients[0];
+            } else {
+                patient = await PatientModel.findOne(
+                    { userId: patientUser._id },
+                    null,
                     { session },
                 );
-                patient = createdPatients[0];
+
+                if (!patient) {
+                    const createdPatients = await PatientModel.create(
+                        [
+                            {
+                                userId: patientUser._id,
+                                bloodGroup: null,
+                                medicalHistory: [],
+                                allergies: [],
+                                emergencyContact: {},
+                            },
+                        ],
+                        { session },
+                    );
+                    patient = createdPatients[0];
+                }
             }
 
             const createdAppointments = await AppointmentModel.create(
                 [
                     {
-                        patientId: patient._id,
+                        patientId: patient?._id || null,
+                        emergencyPatientId: emergencyPatient?._id || null,
                         doctorId,
-                        date: new Date(date),
-                        timeSlot,
+                        date: appointmentDate,
+                        timeSlot: slotLabel,
                         status: "confirmed",
-                        urgencyLevel: urgencyLevel || "normal",
+                        urgencyLevel: emergencyMode
+                            ? "emergency"
+                            : urgencyLevel || "normal",
                         symptoms: symptoms || [],
-                        aiSummary: symptoms
-                            ? `**Walk-in Patient**\n\nSymptoms: ${symptoms.join(", ")}\n\nBooked by admin (offline).`
-                            : "Walk-in patient. Booked by admin (offline).",
+                        aiSummary: emergencyMode
+                            ? `**Emergency Triage Booking**\n\nCondition: ${emergencyConditionSummary || "Unconscious / critical condition"}\n\nWard: ${emergencyWardLocation || "Emergency Ward"}\n\nImmediate priority assigned by admin.`
+                            : symptoms
+                              ? `**Walk-in Patient**\n\nSymptoms: ${symptoms.join(", ")}\n\nBooked by admin (offline).`
+                              : "Walk-in patient. Booked by admin (offline).",
                         adminApprovedBy: adminId,
                         adminApprovedAt: new Date(),
-                        adminNotes: adminNotes || "Offline booking by admin",
+                        adminNotes:
+                            adminNotes ||
+                            (emergencyMode
+                                ? "Emergency triage booking by admin"
+                                : "Offline booking by admin"),
+                        queueStatus: emergencyMode ? "called" : "waiting",
+                        queueNotificationMessage: emergencyMode
+                            ? "Immediate Priority - Doctor report to emergency ward"
+                            : "",
+                        emergencyMetadata: {
+                            isEmergencyTriage: emergencyMode,
+                            immediatePriority: emergencyMode,
+                            wardLocation: emergencyWardLocation || "",
+                        },
                         originalBooking: {
                             doctorId,
-                            date: new Date(date),
-                            timeSlot,
+                            date: appointmentDate,
+                            timeSlot: slotLabel,
                         },
                     },
                 ],
@@ -1484,21 +1556,28 @@ const offlineBookAppointment = async (adminId, bookingData) => {
             );
             appointment = createdAppointments[0];
 
-            const queueDate = getISTDateKey(date);
-            const queueType = appointment.queueType || "normal";
-            const tokenDoc = await QueueTokenModel.findOneAndUpdate(
-                { queueDate, doctorId, queueType },
-                { $inc: { lastSequence: 1 } },
-                { upsert: true, new: true, session },
-            );
-
-            appointment.tokenSequence = tokenDoc.lastSequence;
+            const queueDate = getISTDateKey(appointmentDate);
             appointment.queueDate = queueDate;
-            appointment.tokenNumber = generateTokenNumber(
-                queueDate,
-                doctorId,
-                tokenDoc.lastSequence,
-            );
+
+            if (emergencyMode) {
+                appointment.tokenSequence = 0;
+                appointment.tokenNumber = `EMR-${Date.now()}`;
+            } else {
+                const queueType = appointment.queueType || "normal";
+                const tokenDoc = await QueueTokenModel.findOneAndUpdate(
+                    { queueDate, doctorId, queueType },
+                    { $inc: { lastSequence: 1 } },
+                    { upsert: true, new: true, session },
+                );
+
+                appointment.tokenSequence = tokenDoc.lastSequence;
+                appointment.tokenNumber = generateTokenNumber(
+                    queueDate,
+                    doctorId,
+                    tokenDoc.lastSequence,
+                );
+            }
+
             await appointment.save({ session });
         });
     } finally {
@@ -1510,11 +1589,14 @@ const offlineBookAppointment = async (adminId, bookingData) => {
     return {
         appointmentId: appointment._id,
         status: appointment.status,
-        patient: patientUser.name,
+        patient: emergencyMode
+            ? emergencyPatientName
+            : patientUser?.name || "Patient",
         doctor: doctorUser.name,
         specialization: doctor.specialization,
         date: appointment.date,
         timeSlot: appointment.timeSlot,
+        immediatePriority: emergencyMode,
     };
 };
 

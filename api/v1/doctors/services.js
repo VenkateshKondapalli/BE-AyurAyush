@@ -100,6 +100,50 @@ const appendQueueAudit = (appointment, eventData) => {
     });
 };
 
+const getPatientDisplayData = (appointment) => {
+    if (appointment?.patientId) {
+        return {
+            id: appointment.patientId._id,
+            name: appointment.patientId.name || "Patient",
+            email: appointment.patientId.email,
+            phone: appointment.patientId.phone,
+            gender: appointment.patientId.gender,
+            age: calculateAge(appointment.patientId.dob),
+            profilePhoto: appointment.patientId.profilePhoto,
+            isEmergencyTriage: false,
+        };
+    }
+
+    if (appointment?.emergencyPatientId) {
+        return {
+            id: appointment.emergencyPatientId._id,
+            name:
+                appointment.emergencyPatientId.displayName ||
+                "Emergency Patient",
+            email: null,
+            phone: appointment.emergencyPatientId.phone || "",
+            gender: null,
+            age: null,
+            profilePhoto: null,
+            isEmergencyTriage: true,
+            conditionSummary:
+                appointment.emergencyPatientId.conditionSummary || "",
+            wardLocation: appointment.emergencyPatientId.wardLocation || "",
+        };
+    }
+
+    return {
+        id: null,
+        name: "Patient",
+        email: null,
+        phone: "",
+        gender: null,
+        age: null,
+        profilePhoto: null,
+        isEmergencyTriage: false,
+    };
+};
+
 const assignTokenIfMissing = async (appointment) => {
     if (!appointment || appointment.tokenNumber) {
         return appointment;
@@ -178,6 +222,7 @@ const getDoctorDashboard = async (userId) => {
             date: { $gte: todayStart, $lte: todayEnd },
         })
             .populate("patientId", "name")
+            .populate("emergencyPatientId", "displayName")
             .sort({ timeSlot: 1, createdAt: 1 })
             .limit(10),
     ]);
@@ -186,23 +231,63 @@ const getDoctorDashboard = async (userId) => {
     const normalizedTodayAppointments = await Promise.all(
         todayAppointmentsDocs.map(assignTokenIfMissing),
     );
-    const todayAppointments = normalizedTodayAppointments.map((apt) => ({
-        appointmentId: apt._id,
-        patient: {
-            id: apt.patientId?._id,
-            name: apt.patientId?.name || "Patient",
+    const sortedTodayAppointments = [...normalizedTodayAppointments].sort(
+        (a, b) => {
+            const aEmergencyScore =
+                a?.emergencyMetadata?.immediatePriority ||
+                a?.emergencyMetadata?.isEmergencyTriage ||
+                a?.urgencyLevel === "emergency"
+                    ? 1
+                    : 0;
+            const bEmergencyScore =
+                b?.emergencyMetadata?.immediatePriority ||
+                b?.emergencyMetadata?.isEmergencyTriage ||
+                b?.urgencyLevel === "emergency"
+                    ? 1
+                    : 0;
+
+            if (aEmergencyScore !== bEmergencyScore) {
+                return bEmergencyScore - aEmergencyScore;
+            }
+
+            const aSeq = Number.isFinite(Number(a?.tokenSequence))
+                ? Number(a.tokenSequence)
+                : Number.MAX_SAFE_INTEGER;
+            const bSeq = Number.isFinite(Number(b?.tokenSequence))
+                ? Number(b.tokenSequence)
+                : Number.MAX_SAFE_INTEGER;
+            if (aSeq !== bSeq) return aSeq - bSeq;
+
+            return String(a?.timeSlot || "").localeCompare(
+                String(b?.timeSlot || ""),
+            );
         },
-        timeSlot: apt.timeSlot,
-        status: apt.status,
-        urgencyLevel: apt.urgencyLevel,
-        date: apt.date,
-        tokenNumber: apt.tokenNumber,
-        queueStatus: apt.queueStatus || "waiting",
-        queueCallCount: apt.queueCallCount || 0,
-        lastCalledAt: apt.lastCalledAt,
-        consultationStartedAt: apt.consultationStartedAt,
-        consultationEndedAt: apt.consultationEndedAt,
-        consultationDurationSeconds: getConsultationDurationSeconds(apt),
+    );
+
+    const todayAppointments = sortedTodayAppointments.map((apt) => ({
+        ...(() => {
+            const patient = getPatientDisplayData(apt);
+            return {
+                appointmentId: apt._id,
+                patient: {
+                    id: patient.id,
+                    name: patient.name,
+                },
+                timeSlot: apt.timeSlot,
+                status: apt.status,
+                urgencyLevel: apt.urgencyLevel,
+                date: apt.date,
+                tokenNumber: apt.tokenNumber,
+                queueStatus: apt.queueStatus || "waiting",
+                queueCallCount: apt.queueCallCount || 0,
+                lastCalledAt: apt.lastCalledAt,
+                consultationStartedAt: apt.consultationStartedAt,
+                consultationEndedAt: apt.consultationEndedAt,
+                consultationDurationSeconds:
+                    getConsultationDurationSeconds(apt),
+                isEmergencyTriage: patient.isEmergencyTriage,
+            };
+        })(),
     }));
 
     return {
@@ -248,6 +333,10 @@ const getDoctorAppointments = async (
     const [appointments, totalCount] = await Promise.all([
         AppointmentModel.find(query)
             .populate("patientId", "name email phone gender dob profilePhoto")
+            .populate(
+                "emergencyPatientId",
+                "displayName phone conditionSummary wardLocation",
+            )
             .sort({ date: 1, timeSlot: 1 })
             .skip(skip)
             .limit(limit),
@@ -255,7 +344,9 @@ const getDoctorAppointments = async (
     ]);
 
     // Batch fetch all patient profiles in one query instead of N+1
-    const patientUserIds = appointments.map((apt) => apt.patientId._id);
+    const patientUserIds = appointments
+        .map((apt) => apt.patientId?._id)
+        .filter(Boolean);
     const patientProfiles = await PatientModel.find({
         userId: { $in: patientUserIds },
     }).select("userId bloodGroup allergies medicalHistory");
@@ -264,7 +355,10 @@ const getDoctorAppointments = async (
     );
 
     const appointmentsWithDetails = appointments.map((apt) => {
-        const patientProfile = profileMap.get(apt.patientId._id.toString());
+        const patientData = getPatientDisplayData(apt);
+        const patientProfile = patientData.id
+            ? profileMap.get(String(patientData.id))
+            : null;
         const derivedQueue = deriveQueueMeta(apt);
 
         return {
@@ -282,15 +376,18 @@ const getDoctorAppointments = async (
             consultationEndedAt: apt.consultationEndedAt,
             consultationDurationSeconds: getConsultationDurationSeconds(apt),
             patient: {
-                id: apt.patientId._id,
-                name: apt.patientId.name,
-                email: apt.patientId.email,
-                phone: apt.patientId.phone,
-                gender: apt.patientId.gender,
-                age: calculateAge(apt.patientId.dob),
-                profilePhoto: apt.patientId.profilePhoto,
+                id: patientData.id,
+                name: patientData.name,
+                email: patientData.email,
+                phone: patientData.phone,
+                gender: patientData.gender,
+                age: patientData.age,
+                profilePhoto: patientData.profilePhoto,
                 bloodGroup: patientProfile?.bloodGroup,
                 allergies: patientProfile?.allergies || [],
+                isEmergencyTriage: patientData.isEmergencyTriage,
+                wardLocation: patientData.wardLocation,
+                conditionSummary: patientData.conditionSummary,
             },
             appointmentDetails: {
                 date: apt.date,
@@ -330,6 +427,10 @@ const getTodayAppointments = async (userId) => {
         date: { $gte: todayStart, $lte: todayEnd },
     })
         .populate("patientId", "name email phone gender dob profilePhoto")
+        .populate(
+            "emergencyPatientId",
+            "displayName phone conditionSummary wardLocation",
+        )
         .sort({ timeSlot: 1 });
 
     const normalizedAppointments = await Promise.all(
@@ -337,9 +438,9 @@ const getTodayAppointments = async (userId) => {
     );
 
     // Batch fetch all patient profiles in one query
-    const patientUserIds = normalizedAppointments.map(
-        (apt) => apt.patientId._id,
-    );
+    const patientUserIds = normalizedAppointments
+        .map((apt) => apt.patientId?._id)
+        .filter(Boolean);
     const patientProfiles = await PatientModel.find({
         userId: { $in: patientUserIds },
     }).select("userId bloodGroup allergies emergencyContact");
@@ -348,7 +449,10 @@ const getTodayAppointments = async (userId) => {
     );
 
     const appointmentsWithDetails = normalizedAppointments.map((apt) => {
-        const patientProfile = profileMap.get(apt.patientId._id.toString());
+        const patientData = getPatientDisplayData(apt);
+        const patientProfile = patientData.id
+            ? profileMap.get(String(patientData.id))
+            : null;
         const derivedQueue = deriveQueueMeta(apt);
 
         return {
@@ -368,14 +472,17 @@ const getTodayAppointments = async (userId) => {
             consultationEndedAt: apt.consultationEndedAt,
             consultationDurationSeconds: getConsultationDurationSeconds(apt),
             patient: {
-                id: apt.patientId._id,
-                name: apt.patientId.name,
-                phone: apt.patientId.phone,
-                gender: apt.patientId.gender,
-                age: calculateAge(apt.patientId.dob),
+                id: patientData.id,
+                name: patientData.name,
+                phone: patientData.phone,
+                gender: patientData.gender,
+                age: patientData.age,
                 bloodGroup: patientProfile?.bloodGroup,
                 allergies: patientProfile?.allergies || [],
                 emergencyContact: patientProfile?.emergencyContact,
+                isEmergencyTriage: patientData.isEmergencyTriage,
+                wardLocation: patientData.wardLocation,
+                conditionSummary: patientData.conditionSummary,
             },
             symptoms: apt.symptoms,
             aiSummary: apt.aiSummary,
@@ -406,6 +513,7 @@ const getTodayAppointments = async (userId) => {
 
 const updateQueueCallState = async (appointment, doctorName, doctorUserId) => {
     const firstCall = !appointment.firstCallEmailSentAt;
+    const canEmailPatient = !!appointment.patientId?.email;
     const now = new Date();
     const previousQueueStatus = appointment.queueStatus || "waiting";
 
@@ -418,13 +526,15 @@ const updateQueueCallState = async (appointment, doctorName, doctorUserId) => {
 
     if (firstCall) {
         appointment.firstCallEmailSentAt = now;
-        notifyPatientTurnCalled(appointment.patientId?.email, {
-            patientName: appointment.patientId?.name,
-            doctorName: doctorName || "Doctor",
-            date: appointment.date,
-            timeSlot: appointment.timeSlot,
-            tokenNumber: appointment.tokenNumber,
-        });
+        if (canEmailPatient) {
+            notifyPatientTurnCalled(appointment.patientId.email, {
+                patientName: appointment.patientId?.name,
+                doctorName: doctorName || "Doctor",
+                date: appointment.date,
+                timeSlot: appointment.timeSlot,
+                tokenNumber: appointment.tokenNumber,
+            });
+        }
     }
 
     appointment.queueNotificationHistory = Array.isArray(
@@ -434,7 +544,8 @@ const updateQueueCallState = async (appointment, doctorName, doctorUserId) => {
         : [];
     appointment.queueNotificationHistory.push({
         sentAt: now,
-        channel: firstCall ? "email_and_in_app" : "in_app_only",
+        channel:
+            firstCall && canEmailPatient ? "email_and_in_app" : "in_app_only",
         deliveryStatus: "delivered",
         actorRole: "doctor",
         actorId: doctorUserId,
@@ -459,7 +570,8 @@ const updateQueueCallState = async (appointment, doctorName, doctorUserId) => {
         queueStatus: appointment.queueStatus,
         queueCallCount: appointment.queueCallCount,
         firstCallEmailSent: firstCall,
-        notificationMode: firstCall ? "email_and_in_app" : "in_app_only",
+        notificationMode:
+            firstCall && canEmailPatient ? "email_and_in_app" : "in_app_only",
         tokenNumber: appointment.tokenNumber,
     };
 };
@@ -473,7 +585,9 @@ const callTodayQueuePatient = async (userId, appointmentId) => {
             doctorId: userId,
             status: "confirmed",
             date: { $gte: todayStart, $lte: todayEnd },
-        }).populate("patientId", "name email"),
+        })
+            .populate("patientId", "name email")
+            .populate("emergencyPatientId", "displayName"),
         UserModel.findById(userId).select("name"),
     ]);
 
@@ -498,6 +612,7 @@ const callNextQueuePatient = async (userId) => {
             date: { $gte: todayStart, $lte: todayEnd },
         })
             .populate("patientId", "name email")
+            .populate("emergencyPatientId", "displayName")
             .sort({ tokenSequence: 1, timeSlot: 1, createdAt: 1 }),
     ]);
 
@@ -525,7 +640,9 @@ const startConsultation = async (userId, appointmentId) => {
         doctorId: userId,
         status: "confirmed",
         date: { $gte: todayStart, $lte: todayEnd },
-    }).populate("patientId", "name");
+    })
+        .populate("patientId", "name")
+        .populate("emergencyPatientId", "displayName");
 
     if (!appointment) {
         const err = new Error("Today's confirmed appointment not found");
@@ -555,7 +672,10 @@ const startConsultation = async (userId, appointmentId) => {
     return {
         appointmentId: appointment._id,
         queueStatus: appointment.queueStatus,
-        patientName: appointment.patientId?.name || "Patient",
+        patientName:
+            appointment.patientId?.name ||
+            appointment.emergencyPatientId?.displayName ||
+            "Patient",
         tokenNumber: appointment.tokenNumber,
         consultationStartedAt: appointment.consultationStartedAt,
     };
@@ -565,7 +685,12 @@ const getAppointmentDetail = async (userId, appointmentId) => {
     const appointment = await AppointmentModel.findOne({
         _id: appointmentId,
         doctorId: userId,
-    }).populate("patientId", "name email phone gender dob profilePhoto");
+    })
+        .populate("patientId", "name email phone gender dob profilePhoto")
+        .populate(
+            "emergencyPatientId",
+            "displayName phone conditionSummary wardLocation",
+        );
 
     if (!appointment) {
         const err = new Error("Appointment not found");
@@ -573,9 +698,11 @@ const getAppointmentDetail = async (userId, appointmentId) => {
         throw err;
     }
 
-    const patientProfile = await PatientModel.findOne({
-        userId: appointment.patientId._id,
-    });
+    const patientProfile = appointment.patientId
+        ? await PatientModel.findOne({
+              userId: appointment.patientId._id,
+          })
+        : null;
 
     const chatHistory = await ChatHistoryModel.findOne({
         conversationId: appointment.chatConversationId,
@@ -603,17 +730,31 @@ const getAppointmentDetail = async (userId, appointmentId) => {
             prescription: appointment.prescription,
         },
         patient: {
-            id: appointment.patientId._id,
-            name: appointment.patientId.name,
-            email: appointment.patientId.email,
-            phone: appointment.patientId.phone,
-            gender: appointment.patientId.gender,
-            age: calculateAge(appointment.patientId.dob),
-            profilePhoto: appointment.patientId.profilePhoto,
+            id:
+                appointment.patientId?._id ||
+                appointment.emergencyPatientId?._id ||
+                null,
+            name:
+                appointment.patientId?.name ||
+                appointment.emergencyPatientId?.displayName ||
+                "Patient",
+            email: appointment.patientId?.email,
+            phone:
+                appointment.patientId?.phone ||
+                appointment.emergencyPatientId?.phone ||
+                "",
+            gender: appointment.patientId?.gender || null,
+            age: appointment.patientId
+                ? calculateAge(appointment.patientId.dob)
+                : null,
+            profilePhoto: appointment.patientId?.profilePhoto,
             bloodGroup: patientProfile?.bloodGroup,
             allergies: patientProfile?.allergies || [],
             medicalHistory: patientProfile?.medicalHistory || [],
             emergencyContact: patientProfile?.emergencyContact,
+            isEmergencyTriage: !appointment.patientId,
+            wardLocation: appointment.emergencyPatientId?.wardLocation,
+            conditionSummary: appointment.emergencyPatientId?.conditionSummary,
         },
         chatDetails: {
             conversationId: chatHistory?.conversationId,
@@ -673,17 +814,19 @@ const completeAppointment = async (
     await appointment.save();
 
     // Fetch patient and doctor info for notification
-    const [patientUser, doctorUser] = await Promise.all([
-        UserModel.findById(appointment.patientId).select("email"),
-        UserModel.findById(userId).select("name"),
-    ]);
-
-    // Fire-and-forget email notification
-    notifyAppointmentCompleted(patientUser.email, {
-        doctorName: doctorUser.name,
-        date: appointment.date,
-        hasPrescription: !!prescription,
-    });
+    const doctorUser = await UserModel.findById(userId).select("name");
+    if (appointment.patientId) {
+        const patientUser = await UserModel.findById(
+            appointment.patientId,
+        ).select("email");
+        if (patientUser?.email) {
+            notifyAppointmentCompleted(patientUser.email, {
+                doctorName: doctorUser.name,
+                date: appointment.date,
+                hasPrescription: !!prescription,
+            });
+        }
+    }
 
     return {
         appointmentId: appointment._id,
@@ -834,6 +977,45 @@ const deactivateEmergencyDelay = async (userId) => {
     return doctor.emergencyState;
 };
 
+const getCustomReferences = async (userId) => {
+    const doctor = await DoctorModel.findOne({ userId }).select("customReferences specialization");
+    if (!doctor) {
+        const err = new Error("Doctor profile not found");
+        err.statusCode = 404;
+        throw err;
+    }
+    return doctor.customReferences || { medications: [], procedures: [], bestPractices: [] };
+};
+
+const addCustomReference = async (userId, activeTab, itemPayload) => {
+    const doctor = await DoctorModel.findOne({ userId });
+    if (!doctor) {
+        const err = new Error("Doctor profile not found");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const currentRefs = doctor.customReferences || { medications: [], procedures: [], bestPractices: [] };
+    
+    // Ensure the structure exists
+    const specialization = doctor.specialization || "General";
+    if (!currentRefs[specialization]) {
+        currentRefs[specialization] = { medications: [], procedures: [], bestPractices: [] };
+    }
+    if (!currentRefs[specialization][activeTab]) {
+        currentRefs[specialization][activeTab] = [];
+    }
+
+    currentRefs[specialization][activeTab].push(itemPayload);
+    
+    // Using markModified since the customReferences type is Mixed
+    doctor.customReferences = currentRefs;
+    doctor.markModified('customReferences');
+    await doctor.save();
+    
+    return currentRefs;
+};
+
 module.exports = {
     getDoctorDashboard,
     getDoctorAppointments,
@@ -847,4 +1029,6 @@ module.exports = {
     updateDoctorProfile,
     activateEmergencyDelay,
     deactivateEmergencyDelay,
+    getCustomReferences,
+    addCustomReference,
 };

@@ -16,6 +16,8 @@ const {
     updateDoctorProfileController,
     activateEmergencyDelayController,
     deactivateEmergencyDelayController,
+    getCustomReferencesController,
+    addCustomReferenceController,
 } = require("./controllers");
 const {
     updateDoctorProfileValidator,
@@ -117,6 +119,21 @@ doctorsRouter.post(
     validateLoggedInUserMiddleware,
     validateDoctorRole,
     deactivateEmergencyDelayController,
+);
+
+// Custom references
+doctorsRouter.get(
+    "/references",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getCustomReferencesController,
+);
+
+doctorsRouter.post(
+    "/references",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    addCustomReferenceController,
 );
 
 module.exports = {
