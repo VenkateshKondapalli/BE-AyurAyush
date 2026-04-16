@@ -1041,31 +1041,51 @@ const addCustomReference = async (userId, activeTab, itemPayload) => {
     return currentRefs;
 };
 
-const getUpcomingAppointments = async (userId) => {
+const getUpcomingAppointments = async (userId, { date, page = 1, limit = 5 } = {}) => {
     const { end: todayEnd } = getISTDayBounds();
+    const skip = (Number(page) - 1) * Number(limit);
 
-    const appointments = await AppointmentModel.find({
+    const filter = {
         doctorId: userId,
         status: { $nin: ["rejected", "cancelled"] },
-        date: { $gt: todayEnd },
-    })
-        .populate("patientId", "name email phone profilePhoto")
-        .sort({ date: 1, timeSlot: 1 })
-        .limit(20);
+    };
 
-    return appointments.map((apt) => ({
-        appointmentId: apt._id,
-        patient: {
-            id: apt.patientId?._id,
-            name: apt.patientId?.name || "Patient",
-            email: apt.patientId?.email,
-            phone: apt.patientId?.phone,
-        },
-        date: apt.date,
-        timeSlot: apt.timeSlot,
-        status: apt.status,
-        urgencyLevel: apt.urgencyLevel,
-    }));
+    if (date) {
+        // Filter by specific date
+        const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
+        filter.date = { $gte: dayStart, $lte: dayEnd };
+    } else {
+        // Default: future appointments only
+        filter.date = { $gt: todayEnd };
+    }
+
+    const [appointments, totalCount] = await Promise.all([
+        AppointmentModel.find(filter)
+            .populate("patientId", "name email phone profilePhoto")
+            .sort({ date: 1, timeSlot: 1 })
+            .skip(skip)
+            .limit(Number(limit)),
+        AppointmentModel.countDocuments(filter),
+    ]);
+
+    return {
+        totalCount,
+        page: Number(page),
+        totalPages: Math.ceil(totalCount / Number(limit)),
+        appointments: appointments.map((apt) => ({
+            appointmentId: apt._id,
+            patient: {
+                id: apt.patientId?._id,
+                name: apt.patientId?.name || "Patient",
+                email: apt.patientId?.email,
+                phone: apt.patientId?.phone,
+            },
+            date: apt.date,
+            timeSlot: apt.timeSlot,
+            status: apt.status,
+            urgencyLevel: apt.urgencyLevel,
+        })),
+    };
 };
 
 const normalizeDateInput = (dateLike) => {

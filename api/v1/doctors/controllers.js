@@ -78,7 +78,12 @@ const getTodayAppointmentsController = async (req, res, next) => {
 
 const getUpcomingAppointmentsController = async (req, res, next) => {
     try {
-        const data = await getUpcomingAppointments(req.currentDoctor.userId);
+        const { date, page, limit } = req.query;
+        const data = await getUpcomingAppointments(req.currentDoctor.userId, {
+            date,
+            page,
+            limit,
+        });
         res.status(200).json({
             isSuccess: true,
             message: "Upcoming appointments retrieved successfully",
