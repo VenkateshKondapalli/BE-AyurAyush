@@ -645,7 +645,11 @@ const cancelAppointment = async (userId, appointmentId) => {
         throw error;
     }
 
-    if (!["pending_payment", "pending_admin_approval", "confirmed"].includes(appointment.status)) {
+    if (
+        !["pending_payment", "pending_admin_approval", "confirmed"].includes(
+            appointment.status,
+        )
+    ) {
         const error = new Error(
             `Cannot cancel appointment with status: ${appointment.status}`,
         );
@@ -850,6 +854,7 @@ module.exports = {
     getAppointmentDetails,
     cancelAppointment,
     getVerifiedDoctors,
+    getPatientProfile,
     updatePatientProfile,
     getTreatmentSuggestionsForPatient,
     getEmergencyDelayForDoctor,
