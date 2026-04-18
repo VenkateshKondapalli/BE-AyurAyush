@@ -1161,32 +1161,24 @@ const getOrCreateAvailability = async (userId) => {
     return availability;
 };
 
-const ensureFutureDate = (date) => {
+const ensureEditWindow = (date) => {
     const { start: todayStart } = getISTDayBounds();
-    if (date < todayStart) {
-        const err = new Error("You can only manage upcoming dates");
+    const minMs = todayStart.getTime() + 8 * 24 * 60 * 60 * 1000;
+    const maxMs = todayStart.getTime() + 14 * 24 * 60 * 60 * 1000;
+    const dateMs = date.getTime();
+    if (dateMs < minMs) {
+        const err = new Error("Availability can only be managed from 8 days ahead. Days 1–7 are visible to patients and locked.");
+        err.statusCode = 400;
+        throw err;
+    }
+    if (dateMs > maxMs) {
+        const err = new Error("Availability can only be managed up to 14 days ahead.");
         err.statusCode = 400;
         throw err;
     }
 };
 
-const ensureSlotRemovalAllowed = async ({
-    userId,
-    date,
-    slot,
-}) => {
-    const now = Date.now();
-    const diffMs = date.getTime() - now;
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-    if (diffMs < sevenDaysMs) {
-        const err = new Error(
-            "Slot can only be removed if appointment date is at least 7 days away",
-        );
-        err.statusCode = 400;
-        throw err;
-    }
-
+const ensureSlotRemovalAllowed = async ({ userId, date, slot }) => {
     const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
     const bookedCount = await AppointmentModel.countDocuments({
         doctorId: userId,
@@ -1194,11 +1186,8 @@ const ensureSlotRemovalAllowed = async ({
         timeSlot: slot,
         status: { $nin: ["cancelled", "rejected"] },
     });
-
     if (bookedCount > 0) {
-        const err = new Error(
-            "Cannot remove this slot because at least one patient is already booked",
-        );
+        const err = new Error("Cannot remove this slot because at least one patient is already booked");
         err.statusCode = 400;
         throw err;
     }
@@ -1262,7 +1251,7 @@ const updateOwnAvailability = async (userId, updateData) => {
 
 const setOwnAvailabilityForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureFutureDate(selectedDate);
+    ensureEditWindow(selectedDate);
 
     const nextSlots = sortSlotStrings(
         [...new Set((payload?.slots || []).map(normalizeSlotString))],
@@ -1314,7 +1303,7 @@ const setOwnAvailabilityForDate = async (userId, payload) => {
 
 const addOwnAvailabilitySlotForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureFutureDate(selectedDate);
+    ensureEditWindow(selectedDate);
     const slot = normalizeSlotString(payload?.slot);
 
     const availability = await getOrCreateAvailability(userId);
@@ -1329,7 +1318,7 @@ const addOwnAvailabilitySlotForDate = async (userId, payload) => {
 
 const removeOwnAvailabilitySlotForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureFutureDate(selectedDate);
+    ensureEditWindow(selectedDate);
     const slot = normalizeSlotString(payload?.slot);
 
     await ensureSlotRemovalAllowed({

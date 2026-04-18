@@ -1448,26 +1448,22 @@ const getOrCreateAvailabilityForDoctor = async (doctorId, adminUserId) => {
 
 const ensureFutureDate = (date) => {
     const { start: todayStart } = getISTDayBounds();
-    if (date < todayStart) {
-        const err = new Error("You can only manage upcoming dates");
+    const minMs = todayStart.getTime() + 8 * 24 * 60 * 60 * 1000;
+    const maxMs = todayStart.getTime() + 14 * 24 * 60 * 60 * 1000;
+    const dateMs = date.getTime();
+    if (dateMs < minMs) {
+        const err = new Error("Availability can only be managed from 8 days ahead. Days 1\u20137 are visible to patients and locked.");
+        err.statusCode = 400;
+        throw err;
+    }
+    if (dateMs > maxMs) {
+        const err = new Error("Availability can only be managed up to 14 days ahead.");
         err.statusCode = 400;
         throw err;
     }
 };
 
 const ensureAdminSlotRemovalAllowed = async ({ doctorId, date, slot }) => {
-    const now = Date.now();
-    const diffMs = date.getTime() - now;
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-    if (diffMs < sevenDaysMs) {
-        const err = new Error(
-            "Slot can only be removed if appointment date is at least 7 days away",
-        );
-        err.statusCode = 400;
-        throw err;
-    }
-
     const { start: dayStart, end: dayEnd } = getISTDayBounds(date);
     const bookedCount = await AppointmentModel.countDocuments({
         doctorId,
