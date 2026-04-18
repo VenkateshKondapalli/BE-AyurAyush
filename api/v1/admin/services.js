@@ -2087,25 +2087,32 @@ const getPastAppointments = async (query = {}) => {
         date: { $lt: todayStart },
     };
 
-    if (query.attended === "true") filter.queueStatus = "completed";
+    // baseFilter never has attended constraint — used for accurate counts
+    const baseFilter = { ...filter };
+
+    if (query.attended === "true")  filter.queueStatus = "completed";
     if (query.attended === "false") filter.queueStatus = { $in: ["waiting", "called"] };
     if (query.from || query.to) {
         filter.date = { $lt: todayStart };
-        if (query.from) filter.date.$gte = new Date(query.from);
+        baseFilter.date = { $lt: todayStart };
+        if (query.from) { filter.date.$gte = new Date(query.from); baseFilter.date.$gte = new Date(query.from); }
         if (query.to) {
             const to = new Date(query.to);
             to.setHours(23, 59, 59, 999);
             filter.date.$lte = to;
+            baseFilter.date.$lte = to;
         }
     }
 
-    const [appointments, totalCount] = await Promise.all([
+    const [appointments, totalCount, attendedCount, notAttendedCount] = await Promise.all([
         AppointmentModel.find(filter)
             .sort({ date: -1, timeSlot: -1, createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean(),
         AppointmentModel.countDocuments(filter),
+        AppointmentModel.countDocuments({ ...baseFilter, queueStatus: "completed" }),
+        AppointmentModel.countDocuments({ ...baseFilter, queueStatus: { $in: ["waiting", "called"] } }),
     ]);
 
     const patientIds = [...new Set(appointments.map((a) => (a.patientId || "").toString()).filter(Boolean))];
@@ -2147,9 +2154,6 @@ const getPastAppointments = async (query = {}) => {
             } : null,
         };
     });
-
-    const attendedCount    = result.filter((r) => r.attended).length;
-    const notAttendedCount = result.filter((r) => !r.attended).length;
 
     return {
         count: result.length,

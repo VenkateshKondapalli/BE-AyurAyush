@@ -212,12 +212,13 @@ const getDoctorDashboard = async (userId, { page = 1, limit = 5 } = {}) => {
     ] = await Promise.all([
         AppointmentModel.countDocuments({
             doctorId: userId,
-            status: { $nin: ["rejected"] },
+            status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
             date: { $gte: todayStart, $lte: todayEnd },
         }),
         AppointmentModel.countDocuments({
             doctorId: userId,
-            status: "pending_admin_approval",
+            status: "confirmed",
+            date: { $gte: todayStart, $lte: todayEnd },
         }),
         AppointmentModel.countDocuments({
             doctorId: userId,
@@ -236,7 +237,7 @@ const getDoctorDashboard = async (userId, { page = 1, limit = 5 } = {}) => {
         ]),
         AppointmentModel.find({
             doctorId: userId,
-            status: { $nin: ["rejected"] },
+            status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
             date: { $gte: todayStart, $lte: todayEnd },
         })
             .populate("patientId", "name")
@@ -473,7 +474,7 @@ const getTodayAppointments = async (userId) => {
 
     const appointments = await AppointmentModel.find({
         doctorId: userId,
-        status: { $nin: ["rejected"] },
+        status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
         date: { $gte: todayStart, $lte: todayEnd },
     })
         .populate("patientId", "name email phone gender dob profilePhoto")
