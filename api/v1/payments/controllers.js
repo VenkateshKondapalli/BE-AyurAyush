@@ -6,6 +6,7 @@ const {
     initiateRefund,
     getRevenueDashboard,
     getAllTransactions,
+    syncRefundStatuses,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
@@ -134,6 +135,19 @@ const getAllTransactionsController = async (req, res, next) => {
     }
 };
 
+const syncRefundStatusesController = async (req, res, next) => {
+    try {
+        const data = await syncRefundStatuses();
+        return res.status(200).json({
+            isSuccess: true,
+            message: `Synced ${data.synced} refund(s) and ${data.methodsSynced} payment method(s) from Razorpay.`,
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     createPaymentOrderController,
     verifyPaymentController,
@@ -142,4 +156,5 @@ module.exports = {
     initiateRefundController,
     getRevenueDashboardController,
     getAllTransactionsController,
+    syncRefundStatusesController,
 };

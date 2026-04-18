@@ -12,6 +12,7 @@ const {
     initiateRefundController,
     getRevenueDashboardController,
     getAllTransactionsController,
+    syncRefundStatusesController,
 } = require("./controllers");
 
 const paymentsRouter = express.Router();
@@ -79,6 +80,14 @@ paymentsRouter.post(
     validateLoggedInUserMiddleware,
     validateIsAdminMiddleware,
     initiateRefundController,
+);
+
+// Sync refund statuses from Razorpay
+paymentsRouter.post(
+    "/admin/sync-refunds",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    syncRefundStatusesController,
 );
 
 module.exports = { paymentsRouter };
