@@ -383,6 +383,7 @@ const bookAppointment = async (
 
     // Fire-and-forget email notification
     notifyAppointmentBooked(patientUser.email, {
+        patientName: patientUser.name,
         doctorName: doctorUser.name,
         date: appointment.date,
         timeSlot: appointment.timeSlot,
@@ -426,8 +427,10 @@ const getPatientAppointments = async (userId, status, query = {}) => {
         }
     }
 
+    // Default sort: desc for completed/cancelled/all, asc for upcoming
+    const defaultSort = (!status || status === "completed" || status === "cancelled") ? "desc" : "asc";
     const sortOrder =
-        String(query.sort || "asc").toLowerCase() === "desc" ? -1 : 1;
+        String(query.sort || defaultSort).toLowerCase() === "desc" ? -1 : 1;
 
     const [appointments, totalCount] = await Promise.all([
         AppointmentModel.find(filter)
@@ -645,7 +648,11 @@ const cancelAppointment = async (userId, appointmentId) => {
         throw error;
     }
 
-    if (!["pending_payment", "pending_admin_approval", "confirmed"].includes(appointment.status)) {
+    if (
+        !["pending_payment", "pending_admin_approval", "confirmed"].includes(
+            appointment.status,
+        )
+    ) {
         const error = new Error(
             `Cannot cancel appointment with status: ${appointment.status}`,
         );
@@ -663,6 +670,7 @@ const cancelAppointment = async (userId, appointmentId) => {
 
     // Fire-and-forget email notification
     notifyAppointmentCancelled(patientUser.email, {
+        patientName: patientUser.name,
         doctorName: doctorUser?.name || "N/A",
         date: appointment.date,
         timeSlot: appointment.timeSlot,
@@ -841,6 +849,47 @@ const getEmergencyDelayForDoctor = async (doctorId) => {
     };
 };
 
+const getPatientNotifications = async (userId) => {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const appointments = await AppointmentModel.find({
+        patientId: userId,
+        updatedAt: { $gte: since },
+    })
+        .populate("doctorId", "name")
+        .sort({ updatedAt: -1 })
+        .lean();
+
+    const notifications = [];
+
+    for (const apt of appointments) {
+        const doctorName = apt.doctorId?.name || "Doctor";
+        const dateStr = apt.date ? new Date(apt.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+
+        if (apt.status === "pending_admin_approval" && apt.createdAt >= since) {
+            notifications.push({ type: "info", title: "Appointment Submitted", message: `Your appointment with Dr. ${doctorName} on ${dateStr} is pending admin review.`, timestamp: apt.createdAt, appointmentId: apt._id });
+        }
+        if (apt.status === "confirmed" && apt.adminApprovedAt) {
+            notifications.push({ type: "success", title: "Appointment Confirmed", message: `Your appointment with Dr. ${doctorName} on ${dateStr} has been confirmed.`, timestamp: apt.adminApprovedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "rejected" && apt.adminApprovedAt) {
+            notifications.push({ type: "error", title: "Appointment Not Approved", message: `Your appointment with Dr. ${doctorName} on ${dateStr} was not approved.`, timestamp: apt.adminApprovedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "completed" && apt.consultationEndedAt) {
+            notifications.push({ type: "success", title: "Consultation Completed", message: `Your consultation with Dr. ${doctorName} on ${dateStr} is complete. Check your prescription.`, timestamp: apt.consultationEndedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "cancelled" && apt.updatedAt) {
+            notifications.push({ type: "warning", title: "Appointment Cancelled", message: `Your appointment with Dr. ${doctorName} on ${dateStr} has been cancelled.`, timestamp: apt.updatedAt, appointmentId: apt._id });
+        }
+        if (apt.firstCallEmailSentAt) {
+            notifications.push({ type: "urgent", title: "Your Turn — Please Proceed", message: `It is your turn for consultation with Dr. ${doctorName}. Token: ${apt.tokenNumber || "N/A"}.`, timestamp: apt.firstCallEmailSentAt, appointmentId: apt._id });
+        }
+    }
+
+    notifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return notifications.slice(0, 50);
+};
+
 module.exports = {
     getPatientDashboard,
     applyForDoctorRole,
@@ -850,7 +899,9 @@ module.exports = {
     getAppointmentDetails,
     cancelAppointment,
     getVerifiedDoctors,
+    getPatientProfile,
     updatePatientProfile,
     getTreatmentSuggestionsForPatient,
     getEmergencyDelayForDoctor,
+    getPatientNotifications,
 };

@@ -22,6 +22,11 @@ const {
     getAppointmentAuditTrail,
     batchDecideAppointments,
     getEmergencyDelays,
+    getOverdueAppointments,
+    cancelOverdueAppointments,
+    getPastAppointments,
+    markNoShowAndRefund,
+    getAdminNotifications,
 } = require("./services");
 
 const adminDashboardController = async (req, res, next) => {
@@ -391,6 +396,59 @@ const getEmergencyDelaysController = async (req, res, next) => {
     }
 };
 
+const getOverdueAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await getOverdueAppointments(req.query);
+        res.status(200).json({ isSuccess: true, message: "Overdue appointments retrieved", data });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const cancelOverdueAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await cancelOverdueAppointments(req.currentAdmin.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: `${data.cancelled} overdue appointment(s) cancelled. ${data.refunded} refund(s) initiated. ${data.notified} apology email(s) sent.`,
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const getPastAppointmentsController = async (req, res, next) => {
+    try {
+        const data = await getPastAppointments(req.query);
+        res.status(200).json({ isSuccess: true, message: "Past appointments retrieved", data });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const markNoShowController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const { reason } = req.body;
+        const data = await markNoShowAndRefund(req.currentAdmin.userId, appointmentId, reason);
+        res.status(200).json({
+            isSuccess: true,
+            message: `Appointment marked as no-show.${data.refundInitiated ? " Refund initiated." : ""} Notification sent to patient.`,
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const getAdminNotificationsController = async (req, res, next) => {
+    try {
+        const data = await getAdminNotifications();
+        res.status(200).json({ isSuccess: true, message: "Notifications retrieved", data });
+    } catch (err) { next(err); }
+};
+
 module.exports = {
     adminDashboardController,
     createDoctorAccountController,
@@ -415,4 +473,9 @@ module.exports = {
     getAppointmentAuditTrailController,
     batchDecideAppointmentsController,
     getEmergencyDelaysController,
+    getOverdueAppointmentsController,
+    cancelOverdueAppointmentsController,
+    getPastAppointmentsController,
+    markNoShowController,
+    getAdminNotificationsController,
 };

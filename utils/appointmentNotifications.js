@@ -91,6 +91,7 @@ const G = {
     grey:   { hdr: "linear-gradient(135deg,#1f2937 0%,#374151 60%,#4b5563 100%)", dh: "#374151", btn: "linear-gradient(135deg,#374151,#6b7280)" },
     amber:  { hdr: "linear-gradient(135deg,#78350f 0%,#92400e 60%,#b45309 100%)", dh: "#92400e", btn: "linear-gradient(135deg,#92400e,#d97706)" },
     teal:   { hdr: "linear-gradient(135deg,#134e4a 0%,#115e59 60%,#0f766e 100%)", dh: "#115e59", btn: "linear-gradient(135deg,#115e59,#0d9488)" },
+    orange: { hdr: "linear-gradient(135deg,#7c2d12 0%,#9a3412 60%,#c2410c 100%)", dh: "#9a3412", btn: "linear-gradient(135deg,#9a3412,#ea580c)" },
 };
 
 const formatDate = (d) => new Date(d).toLocaleDateString("en-IN", {
@@ -109,12 +110,12 @@ const sendNotification = async (toEmail, subject, html) => {
 
 // ─── Email functions ─────────────────────────────────────────────────────────
 
-const notifyAppointmentBooked = (patientEmail, { doctorName, date, timeSlot, urgencyLevel }) => {
+const notifyAppointmentBooked = (patientEmail, { patientName, doctorName, date, timeSlot, urgencyLevel }) => {
     sendNotification(patientEmail, "Appointment Submitted — AyurAyush",
         buildEmail({
             headerClass: G.blue.hdr,
             title: "Appointment Submitted",
-            greeting: "Dear Patient,",
+            greeting: `Dear ${patientName || "Patient"},`,
             message: "Your appointment request has been successfully submitted and is currently awaiting admin review. You will be notified once it is approved.",
             detailHeaderClass: G.blue.dh,
             rows: [
@@ -132,7 +133,7 @@ const notifyAppointmentBooked = (patientEmail, { doctorName, date, timeSlot, urg
     );
 };
 
-const notifyAppointmentApproved = (patientEmail, { doctorName, date, timeSlot, wasEdited = false, editedFields = [], adminNotes = "" }) => {
+const notifyAppointmentApproved = (patientEmail, { patientName, doctorName, date, timeSlot, wasEdited = false, editedFields = [], adminNotes = "" }) => {
     let extraHtml = "";
 
     if (wasEdited && Array.isArray(editedFields) && editedFields.length > 0) {
@@ -156,7 +157,7 @@ const notifyAppointmentApproved = (patientEmail, { doctorName, date, timeSlot, w
         buildEmail({
             headerClass: G.green.hdr,
             title: "Appointment Confirmed",
-            greeting: "Dear Patient,",
+            greeting: `Dear ${patientName || "Patient"},`,
             message: "Your appointment has been reviewed and confirmed by our admin team. Please make sure to arrive on time for your consultation.",
             detailHeaderClass: G.green.dh,
             rows: [
@@ -175,12 +176,12 @@ const notifyAppointmentApproved = (patientEmail, { doctorName, date, timeSlot, w
     );
 };
 
-const notifyAppointmentRejected = (patientEmail, { doctorName, date, reason }) => {
+const notifyAppointmentRejected = (patientEmail, { patientName, doctorName, date, reason }) => {
     sendNotification(patientEmail, "Appointment Not Approved — AyurAyush",
         buildEmail({
             headerClass: G.red.hdr,
             title: "Appointment Not Approved",
-            greeting: "Dear Patient,",
+            greeting: `Dear ${patientName || "Patient"},`,
             message: "We regret to inform you that your appointment request could not be approved at this time. Please review the details below.",
             detailHeaderClass: G.red.dh,
             rows: [
@@ -197,12 +198,12 @@ const notifyAppointmentRejected = (patientEmail, { doctorName, date, reason }) =
     );
 };
 
-const notifyAppointmentCompleted = (patientEmail, { doctorName, date, hasPrescription }) => {
+const notifyAppointmentCompleted = (patientEmail, { patientName, doctorName, date, hasPrescription }) => {
     sendNotification(patientEmail, "Consultation Completed — AyurAyush",
         buildEmail({
             headerClass: G.purple.hdr,
             title: "Consultation Completed",
-            greeting: "Dear Patient,",
+            greeting: `Dear ${patientName || "Patient"},`,
             message: "Your consultation has been successfully completed. We hope you had a positive experience with our healthcare team.",
             detailHeaderClass: G.purple.dh,
             detailTitle: "Consultation Summary",
@@ -222,12 +223,12 @@ const notifyAppointmentCompleted = (patientEmail, { doctorName, date, hasPrescri
     );
 };
 
-const notifyAppointmentCancelled = (patientEmail, { doctorName, date, timeSlot }) => {
+const notifyAppointmentCancelled = (patientEmail, { patientName, doctorName, date, timeSlot }) => {
     sendNotification(patientEmail, "Appointment Cancelled — AyurAyush",
         buildEmail({
             headerClass: G.grey.hdr,
             title: "Appointment Cancelled",
-            greeting: "Dear Patient,",
+            greeting: `Dear ${patientName || "Patient"},`,
             message: "Your appointment has been cancelled as requested. We hope to see you again soon.",
             detailHeaderClass: G.grey.dh,
             detailTitle: "Cancelled Appointment",
@@ -292,6 +293,77 @@ const notifyDoctorOnboarded = (doctorEmail, { doctorName, temporaryPassword, log
     );
 };
 
+const notifyPatientNotAttended = (patientEmail, { patientName, doctorName, date, timeSlot, refundInitiated }) => {
+    sendNotification(patientEmail, "Appointment Cancelled — No-Show — AyurAyush",
+        buildEmail({
+            headerClass: G.grey.hdr,
+            title: "Appointment Cancelled",
+            greeting: `Dear ${patientName || "Patient"},`,
+            message: "We noticed you were unable to attend your scheduled appointment. As a result, your appointment has been marked as cancelled. We understand that circumstances can be unpredictable and we hope you are doing well.",
+            detailHeaderClass: G.grey.dh,
+            detailTitle: "Appointment Details",
+            rows: [
+                ["Doctor", `Dr. ${doctorName}`],
+                ["Date", formatDate(date)],
+                ["Time Slot", timeSlot],
+                ["Refund", refundInitiated ? "Initiated — will reflect in 5–7 business days" : "Not applicable"],
+            ],
+            noteClass: "grey",
+            noteText: "If you believe this is an error or would like to reschedule, please book a new appointment from your dashboard. We look forward to serving you.",
+            btnClass: G.grey.btn,
+            btnText: "Book a New Appointment",
+            btnHref: `${FRONTEND_URL}/patient/book-appointment`,
+        }),
+    );
+};
+
+const notifyAppointmentOverdue = (patientEmail, { doctorName, date, timeSlot, refundInitiated }) => {
+    sendNotification(patientEmail, "Appointment Request Expired — AyurAyush",
+        buildEmail({
+            headerClass: G.orange.hdr,
+            title: "Appointment Request Expired",
+            greeting: "Dear Patient,",
+            message: "We sincerely apologise. Your appointment request was not reviewed by our admin team before the scheduled date. This is entirely our oversight and we are sorry for the inconvenience caused.",
+            detailHeaderClass: G.orange.dh,
+            detailTitle: "Expired Appointment",
+            rows: [
+                ["Doctor", `Dr. ${doctorName}`],
+                ["Date", formatDate(date)],
+                ["Time Slot", timeSlot],
+                ["Refund", refundInitiated ? "Initiated — will reflect in 5–7 business days" : "Not applicable"],
+            ],
+            noteClass: "amber",
+            noteText: "We understand this is frustrating. Please book a new appointment at your convenience — we will prioritise your request.",
+            btnClass: G.orange.btn,
+            btnText: "Book a New Appointment",
+            btnHref: `${FRONTEND_URL}/patient/book-appointment`,
+        }),
+    );
+};
+
+const notifySubAdminOnboarded = (subAdminEmail, { subAdminName, temporaryPassword, loginUrl }) => {
+    sendNotification(subAdminEmail, "Sub-Admin Account Ready — AyurAyush",
+        buildEmail({
+            headerClass: G.blue.hdr,
+            title: "Sub-Admin Account Ready",
+            greeting: `Dear ${subAdminName},`,
+            message: "Your sub-admin account has been created by the hospital administration. You can now log in to the AyurAyush portal to manage your assigned queues and appointments.",
+            detailHeaderClass: G.blue.dh,
+            detailTitle: "Login Credentials",
+            rows: [
+                ["Name", subAdminName],
+                ["Email", subAdminEmail],
+                ["Temp Password", temporaryPassword],
+            ],
+            noteClass: "blue",
+            noteText: "For security, please log in and change your password immediately. Your temporary password will expire after first use.",
+            btnClass: G.blue.btn,
+            btnText: "Login to Portal",
+            btnHref: loginUrl,
+        }),
+    );
+};
+
 module.exports = {
     notifyAppointmentBooked,
     notifyAppointmentApproved,
@@ -300,4 +372,7 @@ module.exports = {
     notifyAppointmentCancelled,
     notifyDoctorOnboarded,
     notifyPatientTurnCalled,
+    notifyPatientNotAttended,
+    notifyAppointmentOverdue,
+    notifySubAdminOnboarded,
 };

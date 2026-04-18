@@ -106,9 +106,21 @@ const doctorAvailabiltySchema = new Schema(
 //method to get available slots for a specific date
 doctorAvailabiltySchema.methods.getAvailableSlotsForDate = function (date) {
     const dateKey = getISTDateKey(date);
-    const dayName = new Date(date).toLocaleDateString("en-US", {
-        weekday: "long",
-    });
+
+    // Derive day name in IST to avoid UTC-offset day mismatch on the server
+    const { year, month, day } = (() => {
+        const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Kolkata",
+            year: "numeric", month: "2-digit", day: "2-digit",
+        }).formatToParts(new Date(date));
+        return {
+            year:  Number(parts.find((p) => p.type === "year")?.value),
+            month: Number(parts.find((p) => p.type === "month")?.value) - 1,
+            day:   Number(parts.find((p) => p.type === "day")?.value),
+        };
+    })();
+    const dayName = new Date(Date.UTC(year, month, day))
+        .toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
 
     const isUnavailable = this.unavailableDates.some((unavail) => {
         const unavailDate = new Date(unavail.date);

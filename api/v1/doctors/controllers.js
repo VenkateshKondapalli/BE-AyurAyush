@@ -19,12 +19,15 @@ const {
     setOwnAvailabilityForDate,
     addOwnAvailabilitySlotForDate,
     removeOwnAvailabilitySlotForDate,
+    markNoShowByDoctor,
+    getDoctorNotifications,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
 const doctorDashboardController = async (req, res, next) => {
     try {
-        const data = await getDoctorDashboard(req.currentDoctor.userId);
+        const { page, limit } = req.query;
+        const data = await getDoctorDashboard(req.currentDoctor.userId, { page, limit });
         res.status(200).json({
             isSuccess: true,
             message: "Doctor dashboard loaded successfully",
@@ -40,12 +43,15 @@ const doctorDashboardController = async (req, res, next) => {
 
 const getDoctorAppointmentsController = async (req, res, next) => {
     try {
-        const { status, date, page, limit } = req.query;
+        const { status, date, urgencyLevel, patientName, page, limit, pastOnly } = req.query;
         const data = await getDoctorAppointments(req.currentDoctor.userId, {
             status,
             date,
+            urgencyLevel,
+            patientName,
             page,
             limit,
+            pastOnly,
         });
         res.status(200).json({
             isSuccess: true,
@@ -401,6 +407,28 @@ const addCustomReferenceController = async (req, res, next) => {
     }
 };
 
+const markNoShowByDoctorController = async (req, res, next) => {
+    try {
+        const { appointmentId } = req.params;
+        const data = await markNoShowByDoctor(req.currentDoctor.userId, appointmentId);
+        res.status(200).json({
+            isSuccess: true,
+            message: `Appointment marked as no-show.${data.refundInitiated ? " Refund initiated." : ""} Patient notified.`,
+            data,
+        });
+    } catch (err) {
+        logger.error("Error in markNoShowByDoctorController", { error: err.message });
+        next(err);
+    }
+};
+
+const getDoctorNotificationsController = async (req, res, next) => {
+    try {
+        const data = await getDoctorNotifications(req.currentDoctor.userId);
+        res.status(200).json({ isSuccess: true, message: "Notifications retrieved", data });
+    } catch (err) { logger.error("Error in getDoctorNotificationsController", { error: err.message }); next(err); }
+};
+
 module.exports = {
     doctorDashboardController,
     getDoctorAppointmentsController,
@@ -422,4 +450,6 @@ module.exports = {
     setOwnAvailabilityForDateController,
     addOwnAvailabilitySlotForDateController,
     removeOwnAvailabilitySlotForDateController,
+    markNoShowByDoctorController,
+    getDoctorNotificationsController,
 };

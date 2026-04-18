@@ -24,6 +24,8 @@ const {
     setOwnAvailabilityForDateController,
     addOwnAvailabilitySlotForDateController,
     removeOwnAvailabilitySlotForDateController,
+    markNoShowByDoctorController,
+    getDoctorNotificationsController,
 } = require("./controllers");
 const {
     updateDoctorProfileValidator,
@@ -101,6 +103,14 @@ doctorsRouter.post(
     validateDoctorRole,
     completeAppointmentValidator,
     completeAppointmentController,
+);
+
+// Mark no-show (past confirmed appointment patient did not attend)
+doctorsRouter.post(
+    "/appointments/:appointmentId/no-show",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    markNoShowByDoctorController,
 );
 
 // Get doctor profile
@@ -184,6 +194,14 @@ doctorsRouter.delete(
     validateLoggedInUserMiddleware,
     validateDoctorRole,
     removeOwnAvailabilitySlotForDateController,
+);
+
+// Notifications
+doctorsRouter.get(
+    "/notifications",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getDoctorNotificationsController,
 );
 
 module.exports = {

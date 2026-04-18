@@ -459,6 +459,57 @@ const initiateRefund = async (adminUserId, appointmentId, reason) => {
     };
 };
 
+// ─── Admin: Sync Refund Statuses from Razorpay ─────────────────────────────
+
+const syncRefundStatuses = async () => {
+    // Sync refund statuses
+    const pendingRefunds = await PaymentModel.find({
+        refundStatus: "initiated",
+        refundId: { $ne: null },
+    }).select("refundId refundStatus refundAmount appointmentId");
+
+    let synced = 0;
+    for (const payment of pendingRefunds) {
+        try {
+            const refund = await razorpay.refunds.fetch(payment.refundId);
+            if (refund.status === "processed") {
+                payment.refundStatus = "processed";
+                payment.status = "refunded";
+                payment.refundProcessedAt = new Date(refund.created_at * 1000);
+                await payment.save();
+                synced++;
+                logger.info("Refund status synced to processed", { refundId: payment.refundId });
+            }
+        } catch (err) {
+            logger.warn("Failed to fetch refund status from Razorpay", { refundId: payment.refundId, error: err.message });
+        }
+    }
+
+    // Sync missing payment method for paid payments
+    const missingMethod = await PaymentModel.find({
+        status: "paid",
+        razorpayPaymentId: { $ne: null },
+        $or: [{ method: null }, { method: { $exists: false } }],
+    }).select("razorpayPaymentId method");
+
+    let methodsSynced = 0;
+    for (const payment of missingMethod) {
+        try {
+            const rzpPayment = await razorpay.payments.fetch(payment.razorpayPaymentId);
+            if (rzpPayment.method) {
+                payment.method = rzpPayment.method;
+                await payment.save();
+                methodsSynced++;
+                logger.info("Payment method synced", { paymentId: payment.razorpayPaymentId, method: rzpPayment.method });
+            }
+        } catch (err) {
+            logger.warn("Failed to fetch payment method from Razorpay", { paymentId: payment.razorpayPaymentId, error: err.message });
+        }
+    }
+
+    return { synced, total: pendingRefunds.length, methodsSynced };
+};
+
 // ─── Admin: Revenue Dashboard ────────────────────────────────────────────────
 
 const getRevenueDashboard = async (query = {}) => {
@@ -515,7 +566,7 @@ const getRevenueDashboard = async (query = {}) => {
 
         // Total refunded
         PaymentModel.aggregate([
-            { $match: { status: "refunded", ...dateFilter } },
+            { $match: { refundStatus: { $in: ["initiated", "processed"] }, ...dateFilter } },
             { $group: { _id: null, total: { $sum: "$refundAmount" }, count: { $sum: 1 } } },
         ]),
 
@@ -734,4 +785,5 @@ module.exports = {
     initiateRefund,
     getRevenueDashboard,
     getAllTransactions,
+    syncRefundStatuses,
 };
