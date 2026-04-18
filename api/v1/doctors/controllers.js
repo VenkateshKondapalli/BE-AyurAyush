@@ -20,6 +20,7 @@ const {
     addOwnAvailabilitySlotForDate,
     removeOwnAvailabilitySlotForDate,
     markNoShowByDoctor,
+    getDoctorNotifications,
 } = require("./services");
 const logger = require("../../../utils/logger");
 
@@ -421,6 +422,13 @@ const markNoShowByDoctorController = async (req, res, next) => {
     }
 };
 
+const getDoctorNotificationsController = async (req, res, next) => {
+    try {
+        const data = await getDoctorNotifications(req.currentDoctor.userId);
+        res.status(200).json({ isSuccess: true, message: "Notifications retrieved", data });
+    } catch (err) { logger.error("Error in getDoctorNotificationsController", { error: err.message }); next(err); }
+};
+
 module.exports = {
     doctorDashboardController,
     getDoctorAppointmentsController,
@@ -443,4 +451,5 @@ module.exports = {
     addOwnAvailabilitySlotForDateController,
     removeOwnAvailabilitySlotForDateController,
     markNoShowByDoctorController,
+    getDoctorNotificationsController,
 };

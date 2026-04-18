@@ -26,6 +26,7 @@ const {
     cancelOverdueAppointments,
     getPastAppointments,
     markNoShowAndRefund,
+    getAdminNotifications,
 } = require("./services");
 
 const adminDashboardController = async (req, res, next) => {
@@ -441,6 +442,13 @@ const markNoShowController = async (req, res, next) => {
     }
 };
 
+const getAdminNotificationsController = async (req, res, next) => {
+    try {
+        const data = await getAdminNotifications();
+        res.status(200).json({ isSuccess: true, message: "Notifications retrieved", data });
+    } catch (err) { next(err); }
+};
+
 module.exports = {
     adminDashboardController,
     createDoctorAccountController,
@@ -469,4 +477,5 @@ module.exports = {
     cancelOverdueAppointmentsController,
     getPastAppointmentsController,
     markNoShowController,
+    getAdminNotificationsController,
 };

@@ -25,6 +25,7 @@ const {
     addOwnAvailabilitySlotForDateController,
     removeOwnAvailabilitySlotForDateController,
     markNoShowByDoctorController,
+    getDoctorNotificationsController,
 } = require("./controllers");
 const {
     updateDoctorProfileValidator,
@@ -193,6 +194,14 @@ doctorsRouter.delete(
     validateLoggedInUserMiddleware,
     validateDoctorRole,
     removeOwnAvailabilitySlotForDateController,
+);
+
+// Notifications
+doctorsRouter.get(
+    "/notifications",
+    validateLoggedInUserMiddleware,
+    validateDoctorRole,
+    getDoctorNotificationsController,
 );
 
 module.exports = {

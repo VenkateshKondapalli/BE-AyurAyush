@@ -27,6 +27,7 @@ const {
     getAppointmentAuditTrailController,
     batchDecideAppointmentsController,
     getEmergencyDelaysController,
+    getAdminNotificationsController,
     callPatientController,
     getTodayQueueController,
     getOverdueAppointmentsController,
@@ -266,6 +267,13 @@ adminsRouter.get(
     validateAnyAdminMiddleware,
     checkPermission("viewQueues"),
     getEmergencyDelaysController,
+);
+
+adminsRouter.get(
+    "/notifications",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    getAdminNotificationsController,
 );
 
 module.exports = { adminsRouter };

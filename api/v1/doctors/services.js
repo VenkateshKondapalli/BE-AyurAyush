@@ -212,7 +212,9 @@ const getDoctorDashboard = async (userId, { page = 1, limit = 5 } = {}) => {
     ] = await Promise.all([
         AppointmentModel.countDocuments({
             doctorId: userId,
-            status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
+            status: {
+                $nin: ["rejected", "pending_admin_approval", "pending_payment"],
+            },
             date: { $gte: todayStart, $lte: todayEnd },
         }),
         AppointmentModel.countDocuments({
@@ -237,7 +239,9 @@ const getDoctorDashboard = async (userId, { page = 1, limit = 5 } = {}) => {
         ]),
         AppointmentModel.find({
             doctorId: userId,
-            status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
+            status: {
+                $nin: ["rejected", "pending_admin_approval", "pending_payment"],
+            },
             date: { $gte: todayStart, $lte: todayEnd },
         })
             .populate("patientId", "name")
@@ -338,7 +342,15 @@ const getDoctorDashboard = async (userId, { page = 1, limit = 5 } = {}) => {
 
 const getDoctorAppointments = async (
     userId,
-    { status, date, urgencyLevel, patientName, page: rawPage, limit: rawLimit, pastOnly },
+    {
+        status,
+        date,
+        urgencyLevel,
+        patientName,
+        page: rawPage,
+        limit: rawLimit,
+        pastOnly,
+    },
 ) => {
     const { page, limit, skip } = parsePagination({
         page: rawPage,
@@ -346,11 +358,14 @@ const getDoctorAppointments = async (
     });
     const query = {
         doctorId: userId,
-        status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
+        status: {
+            $nin: ["rejected", "pending_admin_approval", "pending_payment"],
+        },
     };
 
     if (status) query.status = status;
-    if (urgencyLevel && urgencyLevel !== "all") query.urgencyLevel = urgencyLevel;
+    if (urgencyLevel && urgencyLevel !== "all")
+        query.urgencyLevel = urgencyLevel;
 
     if (pastOnly === "true" || pastOnly === true) {
         // not_closed tab: past confirmed only
@@ -474,7 +489,9 @@ const getTodayAppointments = async (userId) => {
 
     const appointments = await AppointmentModel.find({
         doctorId: userId,
-        status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
+        status: {
+            $nin: ["rejected", "pending_admin_approval", "pending_payment"],
+        },
         date: { $gte: todayStart, $lte: todayEnd },
     })
         .populate("patientId", "name email phone gender dob profilePhoto")
@@ -1036,13 +1053,21 @@ const deactivateEmergencyDelay = async (userId) => {
 };
 
 const getCustomReferences = async (userId) => {
-    const doctor = await DoctorModel.findOne({ userId }).select("customReferences specialization");
+    const doctor = await DoctorModel.findOne({ userId }).select(
+        "customReferences specialization",
+    );
     if (!doctor) {
         const err = new Error("Doctor profile not found");
         err.statusCode = 404;
         throw err;
     }
-    return doctor.customReferences || { medications: [], procedures: [], bestPractices: [] };
+    return (
+        doctor.customReferences || {
+            medications: [],
+            procedures: [],
+            bestPractices: [],
+        }
+    );
 };
 
 const addCustomReference = async (userId, activeTab, itemPayload) => {
@@ -1053,28 +1078,39 @@ const addCustomReference = async (userId, activeTab, itemPayload) => {
         throw err;
     }
 
-    const currentRefs = doctor.customReferences || { medications: [], procedures: [], bestPractices: [] };
-    
+    const currentRefs = doctor.customReferences || {
+        medications: [],
+        procedures: [],
+        bestPractices: [],
+    };
+
     // Ensure the structure exists
     const specialization = doctor.specialization || "General";
     if (!currentRefs[specialization]) {
-        currentRefs[specialization] = { medications: [], procedures: [], bestPractices: [] };
+        currentRefs[specialization] = {
+            medications: [],
+            procedures: [],
+            bestPractices: [],
+        };
     }
     if (!currentRefs[specialization][activeTab]) {
         currentRefs[specialization][activeTab] = [];
     }
 
     currentRefs[specialization][activeTab].push(itemPayload);
-    
+
     // Using markModified since the customReferences type is Mixed
     doctor.customReferences = currentRefs;
-    doctor.markModified('customReferences');
+    doctor.markModified("customReferences");
     await doctor.save();
-    
+
     return currentRefs;
 };
 
-const getUpcomingAppointments = async (userId, { date, page = 1, limit = 5 } = {}) => {
+const getUpcomingAppointments = async (
+    userId,
+    { date, page = 1, limit = 5 } = {},
+) => {
     const { end: todayEnd } = getISTDayBounds();
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -1148,7 +1184,9 @@ const sortSlotStrings = (slots = []) =>
     [...slots].sort((a, b) => String(a).localeCompare(String(b)));
 
 const getOrCreateAvailability = async (userId) => {
-    let availability = await DoctorAvailabiltyModel.findOne({ doctorId: userId });
+    let availability = await DoctorAvailabiltyModel.findOne({
+        doctorId: userId,
+    });
     if (!availability) {
         availability = await DoctorAvailabiltyModel.create({
             doctorId: userId,
@@ -1162,18 +1200,39 @@ const getOrCreateAvailability = async (userId) => {
     return availability;
 };
 
-const ensureEditWindow = (date) => {
+const ensureManageWindow = (date) => {
     const { start: todayStart } = getISTDayBounds();
-    const minMs = todayStart.getTime() + 8 * 24 * 60 * 60 * 1000;
+    const minMs = todayStart.getTime();
     const maxMs = todayStart.getTime() + 14 * 24 * 60 * 60 * 1000;
     const dateMs = date.getTime();
     if (dateMs < minMs) {
-        const err = new Error("Availability can only be managed from 8 days ahead. Days 1–7 are visible to patients and locked.");
+        const err = new Error(
+            "Availability can only be managed for today and upcoming 14 days.",
+        );
         err.statusCode = 400;
         throw err;
     }
     if (dateMs > maxMs) {
-        const err = new Error("Availability can only be managed up to 14 days ahead.");
+        const err = new Error(
+            "Availability can only be managed up to 14 days ahead.",
+        );
+        err.statusCode = 400;
+        throw err;
+    }
+};
+
+const isWithinFirstSevenDays = (date) => {
+    const { start: todayStart } = getISTDayBounds();
+    const dateMs = date.getTime();
+    const maxRestrictedMs = todayStart.getTime() + 7 * 24 * 60 * 60 * 1000;
+    return dateMs >= todayStart.getTime() && dateMs <= maxRestrictedMs;
+};
+
+const ensureRemovalWindowAllowed = (date) => {
+    if (isWithinFirstSevenDays(date)) {
+        const err = new Error(
+            "Slots for today through the next 7 days cannot be removed once added.",
+        );
         err.statusCode = 400;
         throw err;
     }
@@ -1188,14 +1247,18 @@ const ensureSlotRemovalAllowed = async ({ userId, date, slot }) => {
         status: { $nin: ["cancelled", "rejected"] },
     });
     if (bookedCount > 0) {
-        const err = new Error("Cannot remove this slot because at least one patient is already booked");
+        const err = new Error(
+            "Cannot remove this slot because at least one patient is already booked",
+        );
         err.statusCode = 400;
         throw err;
     }
 };
 
 const getOwnAvailability = async (userId, date) => {
-    const availability = await DoctorAvailabiltyModel.findOne({ doctorId: userId });
+    const availability = await DoctorAvailabiltyModel.findOne({
+        doctorId: userId,
+    });
     if (!availability) {
         return {
             availableDays: [],
@@ -1252,15 +1315,19 @@ const updateOwnAvailability = async (userId, updateData) => {
 
 const setOwnAvailabilityForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureEditWindow(selectedDate);
+    ensureManageWindow(selectedDate);
 
-    const nextSlots = sortSlotStrings(
-        [...new Set((payload?.slots || []).map(normalizeSlotString))],
-    );
+    const nextSlots = sortSlotStrings([
+        ...new Set((payload?.slots || []).map(normalizeSlotString)),
+    ]);
 
     const availability = await getOrCreateAvailability(userId);
     const existingSlots = availability.getAvailableSlotsForDate(selectedDate);
     const toRemove = existingSlots.filter((slot) => !nextSlots.includes(slot));
+
+    if (toRemove.length > 0) {
+        ensureRemovalWindowAllowed(selectedDate);
+    }
 
     for (const slot of toRemove) {
         await ensureSlotRemovalAllowed({
@@ -1270,7 +1337,9 @@ const setOwnAvailabilityForDate = async (userId, payload) => {
         });
     }
 
-    availability.dateSpecificSlots = Array.isArray(availability.dateSpecificSlots)
+    availability.dateSpecificSlots = Array.isArray(
+        availability.dateSpecificSlots,
+    )
         ? availability.dateSpecificSlots
         : [];
 
@@ -1304,7 +1373,7 @@ const setOwnAvailabilityForDate = async (userId, payload) => {
 
 const addOwnAvailabilitySlotForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureEditWindow(selectedDate);
+    ensureManageWindow(selectedDate);
     const slot = normalizeSlotString(payload?.slot);
 
     const availability = await getOrCreateAvailability(userId);
@@ -1319,7 +1388,8 @@ const addOwnAvailabilitySlotForDate = async (userId, payload) => {
 
 const removeOwnAvailabilitySlotForDate = async (userId, payload) => {
     const selectedDate = normalizeDateInput(payload?.date);
-    ensureEditWindow(selectedDate);
+    ensureManageWindow(selectedDate);
+    ensureRemovalWindowAllowed(selectedDate);
     const slot = normalizeSlotString(payload?.slot);
 
     await ensureSlotRemovalAllowed({
@@ -1349,7 +1419,9 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
     });
 
     if (!appointment) {
-        const err = new Error("Past confirmed appointment not found for this doctor");
+        const err = new Error(
+            "Past confirmed appointment not found for this doctor",
+        );
         err.statusCode = 404;
         throw err;
     }
@@ -1364,7 +1436,8 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
     });
 
     appointment.status = "cancelled";
-    appointment.adminNotes = "Patient did not attend — marked no-show by doctor";
+    appointment.adminNotes =
+        "Patient did not attend — marked no-show by doctor";
     await appointment.save();
 
     // Auto-refund if paid
@@ -1377,14 +1450,17 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
     let refundInitiated = false;
     if (payment) {
         try {
-            const refund = await razorpay.payments.refund(payment.razorpayPaymentId, {
-                amount: payment.amount,
-                notes: {
-                    reason: "Patient no-show",
-                    appointmentId: appointmentId.toString(),
-                    doctorId: doctorUserId.toString(),
+            const refund = await razorpay.payments.refund(
+                payment.razorpayPaymentId,
+                {
+                    amount: payment.amount,
+                    notes: {
+                        reason: "Patient no-show",
+                        appointmentId: appointmentId.toString(),
+                        doctorId: doctorUserId.toString(),
+                    },
                 },
-            });
+            );
             payment.refundId = refund.id;
             payment.refundAmount = refund.amount;
             payment.refundStatus = "initiated";
@@ -1392,9 +1468,15 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
             payment.refundInitiatedAt = new Date();
             await payment.save();
             refundInitiated = true;
-            logger.info("Auto-refund initiated for doctor no-show", { appointmentId, refundId: refund.id });
+            logger.info("Auto-refund initiated for doctor no-show", {
+                appointmentId,
+                refundId: refund.id,
+            });
         } catch (refundErr) {
-            logger.error("Auto-refund failed for doctor no-show", { appointmentId, error: refundErr.message });
+            logger.error("Auto-refund failed for doctor no-show", {
+                appointmentId,
+                error: refundErr.message,
+            });
         }
     }
 
@@ -1413,7 +1495,47 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
         });
     }
 
-    return { appointmentId: appointment._id, status: appointment.status, refundInitiated };
+    return {
+        appointmentId: appointment._id,
+        status: appointment.status,
+        refundInitiated,
+    };
+};
+
+const getDoctorNotifications = async (userId) => {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const appointments = await AppointmentModel.find({
+        doctorId: userId,
+        status: { $nin: ["rejected", "pending_admin_approval", "pending_payment"] },
+        updatedAt: { $gte: since },
+    })
+        .populate("patientId", "name")
+        .sort({ updatedAt: -1 })
+        .lean();
+
+    const notifications = [];
+
+    for (const apt of appointments) {
+        const patientName = apt.patientId?.name || "Patient";
+        const dateStr = apt.date ? new Date(apt.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+
+        if (apt.status === "confirmed" && apt.adminApprovedAt) {
+            notifications.push({ type: "success", title: "New Appointment Confirmed", message: `${patientName} has a confirmed appointment on ${dateStr} at ${apt.timeSlot}.`, timestamp: apt.adminApprovedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "completed" && apt.consultationEndedAt) {
+            notifications.push({ type: "info", title: "Consultation Completed", message: `Consultation with ${patientName} on ${dateStr} marked as completed.`, timestamp: apt.consultationEndedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "cancelled" && apt.updatedAt) {
+            notifications.push({ type: "warning", title: "Appointment Cancelled", message: `Appointment with ${patientName} on ${dateStr} was cancelled.`, timestamp: apt.updatedAt, appointmentId: apt._id });
+        }
+        if (apt.firstCallEmailSentAt) {
+            notifications.push({ type: "urgent", title: "Patient Called", message: `${patientName} was notified for their turn on ${dateStr}. Token: ${apt.tokenNumber || "N/A"}.`, timestamp: apt.firstCallEmailSentAt, appointmentId: apt._id });
+        }
+    }
+
+    notifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return notifications.slice(0, 50);
 };
 
 module.exports = {
@@ -1438,4 +1560,5 @@ module.exports = {
     getCustomReferences,
     addCustomReference,
     markNoShowByDoctor,
+    getDoctorNotifications,
 };

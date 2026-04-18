@@ -2267,6 +2267,45 @@ const getEmergencyDelays = async () => {
     }));
 };
 
+const getAdminNotifications = async () => {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const appointments = await AppointmentModel.find({
+        createdAt: { $gte: since },
+        status: { $nin: ["pending_payment"] },
+    })
+        .populate("patientId", "name")
+        .populate("doctorId", "name")
+        .sort({ createdAt: -1 })
+        .lean();
+
+    const notifications = [];
+
+    for (const apt of appointments) {
+        const patientName = apt.patientId?.name || "Patient";
+        const doctorName = apt.doctorId?.name || "Doctor";
+        const dateStr = apt.date ? new Date(apt.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+
+        if (apt.status === "pending_admin_approval") {
+            const type = apt.urgencyLevel === "emergency" ? "urgent" : "info";
+            const title = apt.urgencyLevel === "emergency" ? "Emergency Appointment Request" : "New Appointment Request";
+            notifications.push({ type, title, message: `${patientName} requested an appointment with Dr. ${doctorName} on ${dateStr}.`, timestamp: apt.createdAt, appointmentId: apt._id });
+        }
+        if (apt.status === "confirmed" && apt.adminApprovedAt) {
+            notifications.push({ type: "success", title: "Appointment Approved", message: `Appointment for ${patientName} with Dr. ${doctorName} on ${dateStr} was approved.`, timestamp: apt.adminApprovedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "rejected" && apt.adminApprovedAt) {
+            notifications.push({ type: "error", title: "Appointment Rejected", message: `Appointment for ${patientName} with Dr. ${doctorName} on ${dateStr} was rejected.`, timestamp: apt.adminApprovedAt, appointmentId: apt._id });
+        }
+        if (apt.status === "cancelled" && apt.updatedAt >= since) {
+            notifications.push({ type: "warning", title: "Appointment Cancelled", message: `Appointment for ${patientName} with Dr. ${doctorName} on ${dateStr} was cancelled.`, timestamp: apt.updatedAt, appointmentId: apt._id });
+        }
+    }
+
+    notifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return notifications.slice(0, 50);
+};
+
 module.exports = {
     getDashboardStats,
     createDoctorAccountByAdmin,
@@ -2295,4 +2334,5 @@ module.exports = {
     cancelOverdueAppointments,
     getPastAppointments,
     markNoShowAndRefund,
+    getAdminNotifications,
 };
