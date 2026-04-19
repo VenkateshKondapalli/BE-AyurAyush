@@ -6,6 +6,7 @@ const {
     checkPermission,
 } = require("../middlewares");
 const {
+    subAdminDashboardController,
     adminDashboardController,
     createDoctorAccountController,
     reviewDoctorApplicationsController,
@@ -43,6 +44,14 @@ const {
 } = require("./dto");
 
 const adminsRouter = express.Router();
+
+// Sub-admin scoped dashboard
+adminsRouter.get(
+    "/sub-admin-dashboard",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    subAdminDashboardController,
+);
 
 // Super-admin only (existing behaviour unchanged)
 adminsRouter.get(

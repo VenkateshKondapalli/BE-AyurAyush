@@ -120,6 +120,84 @@ const buildSlotCountMap = (appointments) => {
     return map;
 };
 
+const getSubAdminDashboard = async (subAdminProfile) => {
+    const perms = subAdminProfile?.permissions || {};
+    const { start: todayStart } = getISTDayBounds();
+
+    // Build parallel queries based only on granted permissions
+    const queries = {};
+
+    if (perms.viewQueues) {
+        queries.pendingNormal = AppointmentModel.countDocuments({
+            status: "pending_admin_approval",
+            urgencyLevel: "normal",
+            date: { $gte: todayStart },
+        });
+        queries.todayConfirmed = AppointmentModel.countDocuments({
+            status: "confirmed",
+            date: { $gte: todayStart },
+        });
+    }
+    if (perms.viewEmergencyQueue) {
+        queries.pendingEmergency = AppointmentModel.countDocuments({
+            status: "pending_admin_approval",
+            urgencyLevel: "emergency",
+            date: { $gte: todayStart },
+        });
+    }
+    if (perms.viewOverdue) {
+        queries.overdue = AppointmentModel.countDocuments({
+            status: "pending_admin_approval",
+            date: { $lt: todayStart },
+        });
+    }
+    if (perms.viewPastAppointments) {
+        queries.pastNotAttended = AppointmentModel.countDocuments({
+            status: "confirmed",
+            date: { $lt: todayStart },
+            queueStatus: { $nin: ["completed", "not_visited"] },
+        });
+        queries.pastNotVisited = AppointmentModel.countDocuments({
+            status: "confirmed",
+            date: { $lt: todayStart },
+            queueStatus: "not_visited",
+        });
+    }
+    if (perms.viewDoctors) {
+        queries.totalDoctors = DoctorModel.countDocuments({ isVerified: true });
+    }
+    if (perms.viewDoctorApplications) {
+        queries.pendingApplications = DoctorApplicationsModel.countDocuments({ status: "pending" });
+    }
+    if (perms.viewRevenue) {
+        const { end: todayEnd } = getISTDayBounds();
+        queries.todayRevenue = PaymentModel.aggregate([
+            { $match: { status: "paid", paidAt: { $gte: todayStart, $lte: todayEnd } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+    }
+
+    // Run all permitted queries in parallel
+    const keys = Object.keys(queries);
+    const results = await Promise.all(keys.map((k) => queries[k]));
+    const data = {};
+    keys.forEach((k, i) => { data[k] = results[i]; });
+
+    return {
+        pendingNormal:       data.pendingNormal ?? null,
+        pendingEmergency:    data.pendingEmergency ?? null,
+        todayConfirmed:      data.todayConfirmed ?? null,
+        overdue:             data.overdue ?? null,
+        pastNotAttended:     data.pastNotAttended ?? null,
+        pastNotVisited:      data.pastNotVisited ?? null,
+        totalDoctors:        data.totalDoctors ?? null,
+        pendingApplications: data.pendingApplications ?? null,
+        todayRevenue:        data.todayRevenue ? Number(((data.todayRevenue[0]?.total || 0) / 100).toFixed(2)) : null,
+        queueScope:          subAdminProfile?.queueScope || "all",
+        permissions:         perms,
+    };
+};
+
 const getDashboardStats = async () => {
     const { start: todayStart, end: todayEnd } = getISTDayBounds();
 
@@ -2309,6 +2387,7 @@ const getAdminNotifications = async () => {
 
 module.exports = {
     getDashboardStats,
+    getSubAdminDashboard,
     createDoctorAccountByAdmin,
     getPendingDoctorApplications,
     approveDoctorApplication,
