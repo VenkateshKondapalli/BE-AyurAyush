@@ -41,10 +41,16 @@ const verifyPaymentController = async (req, res, next) => {
             razorpaySignature,
         } = req.body;
 
-        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+        if (
+            !appointmentId ||
+            !razorpayOrderId ||
+            !razorpayPaymentId ||
+            !razorpaySignature
+        ) {
             return res.status(400).json({
                 isSuccess: false,
-                message: "appointmentId, razorpayOrderId, razorpayPaymentId and razorpaySignature are required",
+                message:
+                    "appointmentId, razorpayOrderId, razorpayPaymentId and razorpaySignature are required",
             });
         }
 
@@ -75,30 +81,35 @@ const getPaymentStatusController = async (req, res, next) => {
 
 // ─── Webhook Controller (no auth — uses signature verification) ──────────────
 
-const webhookController = async (req, res, next) => {
+const webhookController = async (req, res) => {
     try {
         const signature = req.headers["x-razorpay-signature"];
 
         if (!signature) {
             logger.warn("Webhook received without signature header");
-            return res.status(400).json({ isSuccess: false, message: "Missing signature" });
+            return res
+                .status(400)
+                .json({ isSuccess: false, message: "Missing signature" });
         }
 
         // rawBody is set by the raw body middleware in routes.js
         const rawBody = req.rawBody;
         if (!rawBody) {
-            return res.status(400).json({ isSuccess: false, message: "Empty body" });
+            return res
+                .status(400)
+                .json({ isSuccess: false, message: "Empty body" });
         }
 
         await handleWebhook(rawBody, signature);
+        logger.info("Webhook processed successfully");
         return res.status(200).json({ received: true });
     } catch (err) {
-        // Always return 200 to Razorpay to prevent retries on auth failures
-        if (err.statusCode === 400) {
-            logger.warn("Webhook rejected", { message: err.message });
-            return res.status(200).json({ received: false });
-        }
-        next(err);
+        logger.error("Webhook processing failed", {
+            statusCode: err.statusCode || 500,
+            message: err.message,
+        });
+        // Always return 200 to Razorpay — any non-200 causes retries and eventual webhook disabling
+        return res.status(200).json({ received: false });
     }
 };
 

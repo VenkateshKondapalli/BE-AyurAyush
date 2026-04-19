@@ -114,6 +114,7 @@ const getPatientDashboard = async (userId) => {
             },
             createdAt: apt.createdAt,
             adminNotes: apt.adminNotes,
+            cancelledBy: apt.cancelledBy || null,
         };
     });
 
@@ -516,6 +517,7 @@ const getPatientAppointments = async (userId, status, query = {}) => {
                 },
                 createdAt: apt.createdAt,
                 adminNotes: apt.adminNotes,
+                cancelledBy: apt.cancelledBy || null,
             };
         }),
     );
@@ -622,6 +624,7 @@ const getAppointmentDetails = async (userId, appointmentId) => {
             prescription: appointment.prescription,
             adminApprovedBy: appointment.adminApprovedBy?.name,
             adminApprovedAt: appointment.adminApprovedAt,
+            cancelledBy: appointment.cancelledBy || null,
             createdAt: appointment.createdAt,
         },
         doctor: {
@@ -667,6 +670,8 @@ const cancelAppointment = async (userId, appointmentId) => {
     ]);
 
     await appointment.cancel("Cancelled by patient");
+    appointment.cancelledBy = "patient";
+    await appointment.save();
 
     // Fire-and-forget email notification
     notifyAppointmentCancelled(patientUser.email, {
@@ -879,7 +884,16 @@ const getPatientNotifications = async (userId) => {
             notifications.push({ type: "success", title: "Consultation Completed", message: `Your consultation with Dr. ${doctorName} on ${dateStr} is complete. Check your prescription.`, timestamp: apt.consultationEndedAt, appointmentId: apt._id });
         }
         if (apt.status === "cancelled" && apt.updatedAt) {
-            notifications.push({ type: "warning", title: "Appointment Cancelled", message: `Your appointment with Dr. ${doctorName} on ${dateStr} has been cancelled.`, timestamp: apt.updatedAt, appointmentId: apt._id });
+            const isNotVisited = apt.cancelledBy === "not_visited";
+            notifications.push({
+                type: "warning",
+                title: isNotVisited ? "Appointment — Not Visited" : "Appointment Cancelled",
+                message: isNotVisited
+                    ? `Your appointment with Dr. ${doctorName} on ${dateStr} was marked as not visited.`
+                    : `Your appointment with Dr. ${doctorName} on ${dateStr} has been cancelled.`,
+                timestamp: apt.updatedAt,
+                appointmentId: apt._id,
+            });
         }
         if (apt.firstCallEmailSentAt) {
             notifications.push({ type: "urgent", title: "Your Turn — Please Proceed", message: `It is your turn for consultation with Dr. ${doctorName}. Token: ${apt.tokenNumber || "N/A"}.`, timestamp: apt.firstCallEmailSentAt, appointmentId: apt._id });

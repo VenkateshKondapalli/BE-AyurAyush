@@ -9,6 +9,16 @@ const {
 const { sendOtp } = require("../otps/services");
 const { UserModel } = require("../../../models/userSchema");
 
+const isProduction = process.env.NODE_ENV === "production";
+
+const cookieOptions = (maxAge) => ({
+    httpOnly: true,
+    sameSite: isProduction ? "lax" : "none",
+    secure: true,
+    ...(isProduction && { domain: ".ayurayush.tech" }),
+    maxAge,
+});
+
 const userSignupController = async (req, res, next) => {
     try {
         const { name, email, phone, gender, dob, password } = req.body;
@@ -41,12 +51,7 @@ const userLoginController = async (req, res, next) => {
             password,
         });
 
-        res.cookie("authorization", token, {
-            httpOnly: true,
-            sameSite: "none",
-            secure: true,
-            maxAge: 1 * 24 * 60 * 60 * 1000,
-        });
+        res.cookie("authorization", token, cookieOptions(1 * 24 * 60 * 60 * 1000));
 
         res.status(200).json({
             isSuccess: true,
@@ -60,12 +65,7 @@ const userLoginController = async (req, res, next) => {
 
 const userLogoutController = async (req, res, next) => {
     try {
-        res.cookie("authorization", "", {
-            httpOnly: true,
-            sameSite: "None",
-            secure: true,
-            maxAge: 0,
-        });
+        res.cookie("authorization", "", cookieOptions(0));
 
         res.status(200).json({
             isSuccess: true,
@@ -93,7 +93,9 @@ const getCurrentUserController = async (req, res, next) => {
         // Attach subAdminProfile if user is a sub-admin
         let subAdminProfile = null;
         if (user.roles.includes("sub_admin")) {
-            const { SubAdminProfileModel } = require("../../../models/subAdminProfileSchema");
+            const {
+                SubAdminProfileModel,
+            } = require("../../../models/subAdminProfileSchema");
             const profile = await SubAdminProfileModel.findOne({
                 userId,
                 isActive: true,

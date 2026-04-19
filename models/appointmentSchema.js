@@ -68,7 +68,7 @@ const appointmentSchema = new Schema(
         },
         queueStatus: {
             type: String,
-            enum: ["waiting", "called", "in_consultation", "completed"],
+            enum: ["waiting", "called", "in_consultation", "completed", "not_visited"],
             default: "waiting",
         },
         queueCallCount: {
@@ -207,6 +207,11 @@ const appointmentSchema = new Schema(
             type: String,
             default: "",
             maxlength: 1000,
+        },
+        cancelledBy: {
+            type: String,
+            enum: ["patient", "admin", "not_visited", "overdue"],
+            default: null,
         },
         adminApprovedAt: {
             type: Date,

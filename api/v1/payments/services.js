@@ -224,7 +224,8 @@ const verifyPayment = async (
     logger.info("Payment verified — appointment moved to pending_admin_approval", {
         appointmentId,
         razorpayPaymentId,
-        amount: toINR(payment.amount),
+        amountINR: toINR(payment.amount),
+        amountPaise: payment.amount,
     });
 
     return {

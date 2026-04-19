@@ -1,5 +1,6 @@
 const {
     getDashboardStats,
+    getSubAdminDashboard,
     createDoctorAccountByAdmin,
     getPendingDoctorApplications,
     approveDoctorApplication,
@@ -28,6 +29,15 @@ const {
     markNoShowAndRefund,
     getAdminNotifications,
 } = require("./services");
+
+const subAdminDashboardController = async (req, res, next) => {
+    try {
+        const data = await getSubAdminDashboard(req.subAdminProfile);
+        res.status(200).json({ isSuccess: true, message: "Sub-admin dashboard loaded", data });
+    } catch (err) {
+        next(err);
+    }
+};
 
 const adminDashboardController = async (req, res, next) => {
     try {
@@ -450,6 +460,7 @@ const getAdminNotificationsController = async (req, res, next) => {
 };
 
 module.exports = {
+    subAdminDashboardController,
     adminDashboardController,
     createDoctorAccountController,
     reviewDoctorApplicationsController,

@@ -6,6 +6,7 @@ const {
     checkPermission,
 } = require("../middlewares");
 const {
+    subAdminDashboardController,
     adminDashboardController,
     createDoctorAccountController,
     reviewDoctorApplicationsController,
@@ -43,6 +44,14 @@ const {
 } = require("./dto");
 
 const adminsRouter = express.Router();
+
+// Sub-admin scoped dashboard
+adminsRouter.get(
+    "/sub-admin-dashboard",
+    validateLoggedInUserMiddleware,
+    validateAnyAdminMiddleware,
+    subAdminDashboardController,
+);
 
 // Super-admin only (existing behaviour unchanged)
 adminsRouter.get(
@@ -163,7 +172,7 @@ adminsRouter.get(
     "/appointments/emergency",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("viewQueues"),
+    checkPermission("viewEmergencyQueue"),
     getEmergencyAppointmentsController,
 );
 
@@ -224,7 +233,7 @@ adminsRouter.get(
     "/appointments/overdue",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("approveAppointments"),
+    checkPermission("viewOverdue"),
     getOverdueAppointmentsController,
 );
 
@@ -232,7 +241,7 @@ adminsRouter.post(
     "/appointments/overdue/cancel-all",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("approveAppointments"),
+    checkPermission("cancelOverdue"),
     cancelOverdueAppointmentsController,
 );
 
@@ -240,7 +249,7 @@ adminsRouter.get(
     "/appointments/past",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("viewQueues"),
+    checkPermission("viewPastAppointments"),
     getPastAppointmentsController,
 );
 
@@ -248,7 +257,7 @@ adminsRouter.post(
     "/appointments/:appointmentId/no-show",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("approveAppointments"),
+    checkPermission("markNoShow"),
     markNoShowController,
 );
 
@@ -257,7 +266,7 @@ adminsRouter.get(
     "/appointments/:appointmentId/audit-trail",
     validateLoggedInUserMiddleware,
     validateAnyAdminMiddleware,
-    checkPermission("viewQueues"),
+    checkPermission("viewAuditTrail"),
     getAppointmentAuditTrailController,
 );
 

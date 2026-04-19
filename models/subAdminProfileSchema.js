@@ -32,6 +32,12 @@ const subAdminProfileSchema = new Schema(
             viewDoctors:           { type: Boolean, default: false },
             offlineBooking:        { type: Boolean, default: false },
             viewDoctorApplications:{ type: Boolean, default: false },
+            viewPastAppointments:  { type: Boolean, default: false },
+            markNoShow:            { type: Boolean, default: false },
+            viewEmergencyQueue:    { type: Boolean, default: false },
+            viewAuditTrail:        { type: Boolean, default: false },
+            viewOverdue:           { type: Boolean, default: false },
+            cancelOverdue:         { type: Boolean, default: false },
         },
         isActive: {
             type: Boolean,

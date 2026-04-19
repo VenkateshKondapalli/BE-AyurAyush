@@ -1,7 +1,12 @@
 const dotenv = require("dotenv");
 dotenv.config();
 
-const required = ["MONGO_DB_URL", "JWT_SECRET", "RESEND_MAILER_API_KEY"];
+const required = [
+    "MONGO_DB_URL",
+    "JWT_SECRET",
+    "RESEND_MAILER_API_KEY",
+    "RAZORPAY_WEBHOOK_SECRET",
+];
 
 required.forEach((key) => {
     if (!process.env[key]) {
@@ -43,6 +48,8 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 
 const app = express();
+
+const { webhookController } = require("./api/v1/payments/controllers");
 
 const configuredFrontendOrigins = [
     process.env.FRONTEND_URL_LOCAL,
@@ -100,6 +107,17 @@ const authLimiter = rateLimit({
 
 app.use(morgan("dev"));
 
+// Webhook route must use raw payload before any JSON body parsing.
+app.post(
+    "/api/v1/payments/webhook",
+    express.raw({ type: "application/json" }),
+    (req, res, next) => {
+        req.rawBody = req.body.toString("utf8");
+        next();
+    },
+    webhookController,
+);
+
 app.use(express.json()); // body-parser in json format
 
 app.use(cookieParser());
@@ -112,7 +130,7 @@ app.get("/", (req, res) => {
 // app.use("/api/v1/auth", authLimiter);
 // app.use("/api/v1/otps", authLimiter);
 
-// Webhook route — bypasses CSRF (secured by Razorpay HMAC signature instead)
+// Payments routes (excluding webhook, already mounted above)
 const { paymentsRouter } = require("./api/v1/payments/routes");
 app.use("/api/v1/payments", paymentsRouter);
 

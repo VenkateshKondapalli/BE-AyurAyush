@@ -8,7 +8,6 @@ const {
     createPaymentOrderController,
     verifyPaymentController,
     getPaymentStatusController,
-    webhookController,
     initiateRefundController,
     getRevenueDashboardController,
     getAllTransactionsController,
@@ -16,19 +15,6 @@ const {
 } = require("./controllers");
 
 const paymentsRouter = express.Router();
-
-// ─── Webhook (MUST be before express.json — needs raw body) ─────────────────
-// Raw body middleware captures exact bytes for HMAC-SHA256 signature verification
-paymentsRouter.post(
-    "/webhook",
-    express.raw({ type: "application/json" }),
-    (req, res, next) => {
-        // Attach rawBody as string for the webhook handler
-        req.rawBody = req.body.toString("utf8");
-        next();
-    },
-    webhookController,
-);
 
 // ─── Patient Routes ──────────────────────────────────────────────────────────
 

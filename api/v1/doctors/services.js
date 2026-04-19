@@ -368,9 +368,10 @@ const getDoctorAppointments = async (
         query.urgencyLevel = urgencyLevel;
 
     if (pastOnly === "true" || pastOnly === true) {
-        // not_closed tab: past confirmed only
+        // not_closed tab: past confirmed only, excluding already-flagged not_visited
         const { start: todayStart } = getISTDayBounds();
         query.date = { $lt: todayStart };
+        query.queueStatus = { $nin: ["not_visited", "completed"] };
     } else if (status === "confirmed") {
         // confirmed tab: today + future only
         const { start: todayStart } = getISTDayBounds();
@@ -451,6 +452,7 @@ const getDoctorAppointments = async (
                 aiSummary: apt.aiSummary,
             },
             isEmergency: apt.urgencyLevel === "emergency",
+            cancelledBy: apt.cancelledBy || null,
             createdAt: apt.createdAt,
         };
     });
@@ -1426,79 +1428,29 @@ const markNoShowByDoctor = async (doctorUserId, appointmentId) => {
         throw err;
     }
 
+    if (appointment.queueStatus === "not_visited") {
+        const err = new Error("Appointment is already flagged as not visited");
+        err.statusCode = 400;
+        throw err;
+    }
+
     appendQueueAudit(appointment, {
-        event: "no_show_cancelled",
-        fromStatus: "confirmed",
-        toStatus: "cancelled",
+        event: "not_visited_flagged",
+        fromStatus: appointment.queueStatus || "waiting",
+        toStatus: "not_visited",
         actorRole: "doctor",
         actorId: doctorUserId,
-        note: "Patient did not attend — marked no-show by doctor",
+        note: "Patient did not attend — flagged by doctor, pending admin confirmation",
     });
 
-    appointment.status = "cancelled";
-    appointment.adminNotes =
-        "Patient did not attend — marked no-show by doctor";
+    appointment.queueStatus = "not_visited";
     await appointment.save();
-
-    // Auto-refund if paid
-    const payment = await PaymentModel.findOne({
-        appointmentId,
-        status: "paid",
-        refundStatus: "none",
-    });
-
-    let refundInitiated = false;
-    if (payment) {
-        try {
-            const refund = await razorpay.payments.refund(
-                payment.razorpayPaymentId,
-                {
-                    amount: payment.amount,
-                    notes: {
-                        reason: "Patient no-show",
-                        appointmentId: appointmentId.toString(),
-                        doctorId: doctorUserId.toString(),
-                    },
-                },
-            );
-            payment.refundId = refund.id;
-            payment.refundAmount = refund.amount;
-            payment.refundStatus = "initiated";
-            payment.refundReason = "Patient no-show — marked by doctor";
-            payment.refundInitiatedAt = new Date();
-            await payment.save();
-            refundInitiated = true;
-            logger.info("Auto-refund initiated for doctor no-show", {
-                appointmentId,
-                refundId: refund.id,
-            });
-        } catch (refundErr) {
-            logger.error("Auto-refund failed for doctor no-show", {
-                appointmentId,
-                error: refundErr.message,
-            });
-        }
-    }
-
-    const [patientUser, doctorUser] = await Promise.all([
-        UserModel.findById(appointment.patientId).select("name email"),
-        UserModel.findById(doctorUserId).select("name"),
-    ]);
-
-    if (patientUser?.email) {
-        notifyPatientNotAttended(patientUser.email, {
-            patientName: patientUser.name,
-            doctorName: doctorUser?.name || "Doctor",
-            date: appointment.date,
-            timeSlot: appointment.timeSlot,
-            refundInitiated,
-        });
-    }
 
     return {
         appointmentId: appointment._id,
         status: appointment.status,
-        refundInitiated,
+        queueStatus: appointment.queueStatus,
+        flaggedByDoctor: true,
     };
 };
 
@@ -1527,7 +1479,16 @@ const getDoctorNotifications = async (userId) => {
             notifications.push({ type: "info", title: "Consultation Completed", message: `Consultation with ${patientName} on ${dateStr} marked as completed.`, timestamp: apt.consultationEndedAt, appointmentId: apt._id });
         }
         if (apt.status === "cancelled" && apt.updatedAt) {
-            notifications.push({ type: "warning", title: "Appointment Cancelled", message: `Appointment with ${patientName} on ${dateStr} was cancelled.`, timestamp: apt.updatedAt, appointmentId: apt._id });
+            const isNotVisited = apt.cancelledBy === "not_visited";
+            notifications.push({
+                type: "warning",
+                title: isNotVisited ? "Patient Not Visited" : "Appointment Cancelled",
+                message: isNotVisited
+                    ? `${patientName} did not attend the appointment on ${dateStr}.`
+                    : `Appointment with ${patientName} on ${dateStr} was cancelled.`,
+                timestamp: apt.updatedAt,
+                appointmentId: apt._id,
+            });
         }
         if (apt.firstCallEmailSentAt) {
             notifications.push({ type: "urgent", title: "Patient Called", message: `${patientName} was notified for their turn on ${dateStr}. Token: ${apt.tokenNumber || "N/A"}.`, timestamp: apt.firstCallEmailSentAt, appointmentId: apt._id });

@@ -413,7 +413,7 @@ const markNoShowByDoctorController = async (req, res, next) => {
         const data = await markNoShowByDoctor(req.currentDoctor.userId, appointmentId);
         res.status(200).json({
             isSuccess: true,
-            message: `Appointment marked as no-show.${data.refundInitiated ? " Refund initiated." : ""} Patient notified.`,
+            message: "Appointment flagged as not visited. Admin will review and confirm.",
             data,
         });
     } catch (err) {
