@@ -7,9 +7,11 @@ const { doctorsRouter } = require("./doctors/routes");
 const { chatRouter } = require("./chat/routes");
 const { treatmentsRouter } = require("./treatments/routes");
 const { superAdminRouter } = require("./super-admin/routes");
+const { publicRouter } = require("./public/routes");
 
 const apiRouter = express.Router();
 
+apiRouter.use("/public", publicRouter);
 apiRouter.use("/auth", authRouter);
 apiRouter.use("/otps", otpRouter);
 apiRouter.use("/patient", patientsRouter);
