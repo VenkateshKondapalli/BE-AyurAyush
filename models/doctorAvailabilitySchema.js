@@ -170,7 +170,7 @@ doctorAvailabiltySchema.statics.getBookableSlots = async function (
             $gte: dayStart,
             $lte: dayEnd,
         },
-        status: { $nin: ["cancelled", "rejected"] },
+        status: { $in: ["pending_admin_approval", "confirmed"] },
     }).select("timeSlot");
 
     const bookedSlots = bookedAppointments.map((apt) => apt.timeSlot);
@@ -180,11 +180,30 @@ doctorAvailabiltySchema.statics.getBookableSlots = async function (
         return acc;
     }, {});
 
-    const SLOT_CAPACITY = 2; // Hardcoded capacity requirement
+    const SLOT_CAPACITY = 2;
 
-    const availableSlots = allSlots.filter(
+    // Filter out fully-booked slots
+    let availableSlots = allSlots.filter(
         (slot) => (slotCounts[slot] || 0) < SLOT_CAPACITY,
     );
+
+    // For today: filter out slots whose start time has already passed (IST)
+    const todayKey = getISTDateKey(new Date());
+    const requestedKey = getISTDateKey(new Date(date));
+    if (requestedKey === todayKey) {
+        const nowIST = new Date(
+            new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+        );
+        const nowMinutes = nowIST.getHours() * 60 + nowIST.getMinutes();
+
+        availableSlots = availableSlots.filter((slot) => {
+            const start = String(slot).split("-")[0].trim();
+            const match = start.match(/^(\d{1,2}):(\d{2})/);
+            if (!match) return true;
+            const slotMinutes = Number(match[1]) * 60 + Number(match[2]);
+            return slotMinutes > nowMinutes;
+        });
+    }
 
     return availableSlots;
 };
