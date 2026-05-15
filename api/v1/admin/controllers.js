@@ -28,6 +28,9 @@ const {
     getPastAppointments,
     markNoShowAndRefund,
     getAdminNotifications,
+    checkDoctorDeactivationEligibility,
+    deactivateDoctorAccount,
+    activateDoctorAccount,
 } = require("./services");
 
 const subAdminDashboardController = async (req, res, next) => {
@@ -393,6 +396,7 @@ const batchDecideAppointmentsController = async (req, res, next) => {
         next(err);
     }
 };
+
 const getEmergencyDelaysController = async (req, res, next) => {
     try {
         const data = await getEmergencyDelays();
@@ -459,6 +463,48 @@ const getAdminNotificationsController = async (req, res, next) => {
     } catch (err) { next(err); }
 };
 
+const checkDoctorDeactivationEligibilityController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await checkDoctorDeactivationEligibility(doctorId);
+        res.status(200).json({
+            isSuccess: true,
+            message: data.canDeactivate ? "Doctor can be deactivated" : "Doctor cannot be deactivated",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const deactivateDoctorAccountController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await deactivateDoctorAccount(doctorId, req.currentAdmin.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor account deactivated successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+const activateDoctorAccountController = async (req, res, next) => {
+    try {
+        const { doctorId } = req.params;
+        const data = await activateDoctorAccount(doctorId, req.currentAdmin.userId);
+        res.status(200).json({
+            isSuccess: true,
+            message: "Doctor account activated successfully",
+            data,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     subAdminDashboardController,
     adminDashboardController,
@@ -489,4 +535,7 @@ module.exports = {
     getPastAppointmentsController,
     markNoShowController,
     getAdminNotificationsController,
+    checkDoctorDeactivationEligibilityController,
+    deactivateDoctorAccountController,
+    activateDoctorAccountController,
 };

@@ -36,6 +36,14 @@ const loginUser = async ({ email, password }) => {
         throw err;
     }
 
+    if (userDoc.isActive === false) {
+        const err = new Error(
+            "Your account has been deactivated. Please contact the administrator.",
+        );
+        err.statusCode = 403;
+        throw err;
+    }
+
     const token = jwt.sign(
         {
             userId: userDoc._id,

@@ -2385,6 +2385,105 @@ const getAdminNotifications = async () => {
     return notifications.slice(0, 50);
 };
 
+const checkDoctorDeactivationEligibility = async (doctorId) => {
+    const { start: todayStart, end: todayEnd } = getISTDayBounds();
+    const futureStart = new Date(todayStart.getTime() + 1 * 24 * 60 * 60 * 1000);
+    const futureEnd = new Date(todayStart.getTime() + 8 * 24 * 60 * 60 * 1000);
+
+    const upcomingAppointments = await AppointmentModel.find({
+        doctorId,
+        date: { $gte: futureStart, $lte: futureEnd },
+        status: { $in: ["confirmed", "pending_admin_approval"] },
+    })
+        .populate("patientId", "name email")
+        .select("_id date timeSlot status patientId urgencyLevel")
+        .lean();
+
+    const canDeactivate = upcomingAppointments.length === 0;
+
+    return {
+        canDeactivate,
+        reason: canDeactivate
+            ? null
+            : `Doctor has ${upcomingAppointments.length} appointment(s) in the next 7 days`,
+        conflictingAppointments: upcomingAppointments.map((apt) => ({
+            appointmentId: apt._id,
+            date: apt.date,
+            timeSlot: apt.timeSlot,
+            status: apt.status,
+            patientName: apt.patientId?.name || "Unknown",
+            patientEmail: apt.patientId?.email,
+            urgencyLevel: apt.urgencyLevel,
+        })),
+    };
+};
+
+const deactivateDoctorAccount = async (doctorId, adminUserId) => {
+    const doctor = await DoctorModel.findOne({
+        userId: doctorId,
+        isVerified: true,
+    });
+
+    if (!doctor) {
+        const err = new Error("Doctor not found or not verified");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const user = await UserModel.findById(doctorId);
+    if (!user) {
+        const err = new Error("User account not found");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    user.isActive = false;
+    await user.save();
+
+    logger.info("Doctor deactivated", { doctorId, deactivatedBy: adminUserId });
+
+    return {
+        doctorId,
+        name: user.name,
+        email: user.email,
+        isActive: user.isActive,
+        deactivatedAt: new Date(),
+    };
+};
+
+const activateDoctorAccount = async (doctorId, adminUserId) => {
+    const doctor = await DoctorModel.findOne({
+        userId: doctorId,
+        isVerified: true,
+    });
+
+    if (!doctor) {
+        const err = new Error("Doctor not found or not verified");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const user = await UserModel.findById(doctorId);
+    if (!user) {
+        const err = new Error("User account not found");
+        err.statusCode = 404;
+        throw err;
+    }
+
+    user.isActive = true;
+    await user.save();
+
+    logger.info("Doctor activated", { doctorId, activatedBy: adminUserId });
+
+    return {
+        doctorId,
+        name: user.name,
+        email: user.email,
+        isActive: user.isActive,
+        activatedAt: new Date(),
+    };
+};
+
 module.exports = {
     getDashboardStats,
     getSubAdminDashboard,
@@ -2415,4 +2514,7 @@ module.exports = {
     getPastAppointments,
     markNoShowAndRefund,
     getAdminNotifications,
+    checkDoctorDeactivationEligibility,
+    deactivateDoctorAccount,
+    activateDoctorAccount,
 };

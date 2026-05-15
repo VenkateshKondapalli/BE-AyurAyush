@@ -35,6 +35,9 @@ const {
     cancelOverdueAppointmentsController,
     getPastAppointmentsController,
     markNoShowController,
+    checkDoctorDeactivationEligibilityController,
+    deactivateDoctorAccountController,
+    activateDoctorAccountController,
 } = require("./controllers");
 const {
     rejectAppointmentValidator,
@@ -107,6 +110,30 @@ adminsRouter.get(
     validateAnyAdminMiddleware,
     checkPermission("viewDoctors"),
     getDoctorAvailableSlotsController,
+);
+
+// Check doctor deactivation eligibility
+adminsRouter.get(
+    "/doctors/:doctorId/check-deactivation",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    checkDoctorDeactivationEligibilityController,
+);
+
+// Deactivate doctor
+adminsRouter.patch(
+    "/doctors/:doctorId/status",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    deactivateDoctorAccountController,
+);
+
+// Activate doctor
+adminsRouter.patch(
+    "/doctors/:doctorId/activate",
+    validateLoggedInUserMiddleware,
+    validateIsAdminMiddleware,
+    activateDoctorAccountController,
 );
 
 // Availability management — super-admin or sub-admin with manageAvailability
